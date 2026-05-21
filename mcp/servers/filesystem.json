@@ -1,0 +1,9 @@
+{
+  "name": "filesystem",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/robertlee/Workspace/Personal"],
+  "env": {},
+  "cwd": "/Users/robertlee/Workspace/Personal/localHermes",
+  "timeout": 30000,
+  "disabled": false
+}

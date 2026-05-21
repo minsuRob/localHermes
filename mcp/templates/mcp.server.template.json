@@ -1,0 +1,11 @@
+{
+  "name": "example-mcp",
+  "command": "npx",
+  "args": ["-y", "@example/mcp-server"],
+  "env": {
+    "EXAMPLE_TOKEN": "$EXAMPLE_TOKEN"
+  },
+  "cwd": "",
+  "timeout": 30000,
+  "disabled": false
+}
