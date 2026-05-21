@@ -1,0 +1,9 @@
+{
+  "name": "sqlite",
+  "command": "npx",
+  "args": ["mcp-sqlite-server"],
+  "env": {},
+  "cwd": "/Users/robertlee/Workspace/Personal/localHermes",
+  "timeout": 30000,
+  "disabled": false
+}

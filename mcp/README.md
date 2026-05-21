@@ -7,6 +7,9 @@
 - `servers/`: MCP 서버 원본 정의 파일
 - `enabled/`: Hermes가 로드할 활성 MCP 목록
 - `templates/`: 새 MCP를 만들 때 복사할 템플릿
+- 샘플 서버:
+  - `fetch.json`: 웹 콘텐츠 수집용
+  - `sqlite.json`: 로컬 SQLite 조회용
 
 ## 설정 파일 스키마 (Config Contract)
 
@@ -28,6 +31,11 @@
    - 방법 A: `enabled/<name>.json`에 심볼릭 링크 생성(권장)
    - 방법 B: 원본 JSON을 복사
 4. Hermes 재시작 후 MCP 인식 확인
+
+샘플 서버는 아래처럼 사용할 수 있습니다.
+
+- `fetch.json`: `npx mcp-fetch-server`
+- `sqlite.json`: `npx mcp-sqlite-server`
 
 예시(심볼릭 링크 방식):
 

@@ -70,17 +70,44 @@ Hermes 앱에서 다음처럼 추가합니다.
 - `mcp/servers/`: MCP 서버 원본 설정(JSON)
 - `mcp/enabled/`: 현재 활성 MCP 설정(JSON 또는 심볼릭 링크)
 - `mcp/templates/`: 신규 MCP 생성 템플릿
+- 자주 쓰는 샘플:
+  - `fetch`: 웹 콘텐츠 가져오기용
+  - `sqlite`: 로컬 SQLite 조회용
 
 자세한 사용법은 [`mcp/README.md`](./mcp/README.md)를 참고하세요.
 
-## 7) 빠른 점검
+## 7) 체크 스크립트
+
+비파괴 검증은 아래 스크립트로 실행합니다.
+
+```bash
+node scripts/check-hermes-local.mjs
+```
+
+기본 동작:
+
+- `mcp/servers`와 `mcp/enabled`의 JSON 형식 검증
+- `MODEL_PATH` 존재 여부 확인
+- `http://127.0.0.1:8080/v1/chat/completions`에 샘플 프롬프트 전송
+- 응답이 `READY` 계열이면 성공으로 판정
+
+필요하면 아래 환경변수로 바꿀 수 있습니다.
+
+```bash
+HERMES_BASE_URL=http://127.0.0.1:8080 \
+HERMES_MODEL_ID=gemma-4-E4B-it-Q5_K_M.gguf \
+MODEL_PATH=/Users/robertlee/Workspace/Personal/localclaw/model/gemma-4-E4B-it-Q5_K_M.gguf \
+node scripts/check-hermes-local.mjs
+```
+
+## 8) 빠른 점검
 
 1. llama.cpp 서버 실행 후 `localhost:8080`에서 응답 확인
 2. Hermes에서 해당 모델 선택 후 단문/다중턴 질문 테스트
 3. 긴 대화에서 메모리 유지 확인
 4. MCP 추가/활성화 후 Hermes 재시작하여 인식 확인
 
-## 8) 범위
+## 9) 범위
 
 - 포함: 모델 연결 + Tools 활성화 + MCP 확장 구조
 - 제외: Telegram/스케줄러(필요 시 후속 확장)

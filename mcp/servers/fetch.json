@@ -1,0 +1,9 @@
+{
+  "name": "fetch",
+  "command": "npx",
+  "args": ["mcp-fetch-server"],
+  "env": {},
+  "cwd": "/Users/robertlee/Workspace/Personal/localHermes",
+  "timeout": 30000,
+  "disabled": false
+}
