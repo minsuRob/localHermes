@@ -65,10 +65,16 @@ function describeControlAction(action = {}) {
   const app = action.app ? ` @ ${action.app}` : '';
   if (name === 'openUrl') return `${name}${app} ${action.url || ''}`.trim();
   if (name === 'clickText') return `${name}${app} "${action.text || ''}"`.trim();
+  if (name === 'clickUi') return `${name}${app} "${action.target?.text || action.text || ''}"`.trim();
   if (name === 'runShell') return `${name}${app} ${action.command || ''}`.trim();
-  if (name === 'waitFor') return `${name} ${Number(action.timeoutMs || action.sleepMs || 0)}ms`.trim();
+  if (name === 'waitFor') {
+    const condition = action.condition?.type || action.condition?.app || action.condition?.text || '';
+    return `${name} ${condition} ${Number(action.timeoutMs || action.sleepMs || 0)}ms`.trim();
+  }
   if (name === 'type') return `${name}${app} "${action.text || ''}"`.trim();
   if (name === 'shortcut') return `${name}${app} ${action.shortcut?.key || action.key || ''}`.trim();
+  if (name === 'verify') return `${name} ${action.type || action.verify || ''} ${action.command || action.text || ''}`.trim();
+  if (name === 'repairPlan') return `${name} ${action.summary || ''}`.trim();
   return `${name}${app}`.trim();
 }
 
@@ -961,7 +967,11 @@ export default function App() {
                       : '아직 실행한 프롬프트가 없습니다.'}
                   </div>
                   {computerResult?.finalStatus && (
-                    <div className="actionMeta">status: {computerResult.finalStatus}{computerResult.failedStep ? ` · failed step ${computerResult.failedStep.step}` : ''}</div>
+                    <div className="actionMeta">
+                      status: {computerResult.finalStatus}
+                      {computerResult.repairRounds ? ` · repairs ${computerResult.repairRounds}` : ''}
+                      {computerResult.failedStep ? ` · failed step ${computerResult.failedStep.step}` : ''}
+                    </div>
                   )}
                   {Array.isArray(computerResult?.executionTrace) && computerResult.executionTrace.length > 0 && (
                     <div className="traceList">

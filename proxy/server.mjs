@@ -25,6 +25,7 @@ import {
 import {
   executeAutomationAction,
   inspectPermissions,
+  probeAutomation,
   openSystemPane,
 } from '../lib/openhermes-automation.mjs';
 
@@ -285,6 +286,7 @@ function inferControlActionsFromPrompt(promptText = '', contextText = '') {
   const wantsTyping = containsAny(lower, [/입력/i, /type/i, /검색/i, /search/i, /write/i, /타이핑/i, /엔터/i, /enter/i]);
   const wantsShell = containsAny(lower, [/cmd/i, /terminal/i, /터미널/i, /shell/i, /zsh/i, /bash/i, /명령/i, /실행/i, /조회/i, /리스트/i, /목록/i]);
   const wantsFolderListing = containsAny(lower, [/현재\s*폴더/i, /폴더\s*리스트/i, /디렉토리/i, /목록/i, /리스트/i, /ls\b/i]);
+  const wantsPlusButton = containsAny(lower, [/\+\s*버튼/i, /plus\s*button/i, /new\s*terminal/i, /새\s*터미널/i, /prompt/i, /cmd\s*창/i, /cmd창/i]);
   const wantsBlogClick = containsAny(lower, [/블로그/i, /blog/i]);
   const browserUrl = inferPreferredBrowserUrl(prompt, lower);
 
@@ -294,7 +296,12 @@ function inferControlActionsFromPrompt(promptText = '', contextText = '') {
       actions.push({ action: 'openUrl', app: 'Google Chrome', url: browserUrl });
     }
     if (wantsClick && wantsBlogClick) {
-      actions.push({ action: 'waitFor', timeoutMs: 1200, sleepMs: 1200, condition: { text: '블로그' } });
+      actions.push({
+        action: 'waitFor',
+        timeoutMs: 1200,
+        sleepMs: 1200,
+        condition: { type: 'screenTextContains', text: '블로그' },
+      });
       actions.push({
         action: 'clickText',
         app: 'Google Chrome',
@@ -315,14 +322,41 @@ function inferControlActionsFromPrompt(promptText = '', contextText = '') {
   if (wantsZed) {
     actions.push({ action: 'launch', app: 'Zed' });
     actions.push({ action: 'focus', app: 'Zed' });
+    actions.push({
+      action: 'waitFor',
+      timeoutMs: 2500,
+      sleepMs: 250,
+      condition: { type: 'frontmostApp', app: 'Zed' },
+    });
+    if (wantsPlusButton || wantsShell) {
+      actions.push({
+        action: 'clickUi',
+        app: 'Zed',
+        target: {
+          text: '+',
+          role: 'button',
+          strategy: 'ax',
+        },
+      });
+      actions.push({
+        action: 'waitFor',
+        timeoutMs: 2000,
+        sleepMs: 250,
+        condition: { type: 'screenTextContains', text: 'zsh' },
+      });
+    }
     if (wantsShell && wantsFolderListing) {
       const command = containsAny(lower, [/pwd/i]) ? 'pwd && ls -la' : 'ls -la';
-      actions.push({ action: 'waitFor', timeoutMs: 500, sleepMs: 500, condition: { app: 'Zed' } });
       actions.push({
         action: 'runShell',
         app: 'Zed',
         command,
         inFocusedTerminal: true,
+      });
+      actions.push({
+        action: 'verify',
+        type: 'terminalOutputVisible',
+        command,
       });
     }
   }
@@ -366,6 +400,172 @@ function inferControlPlan(promptText, contextText = '') {
   };
 }
 
+function describePlannerAction(action = {}) {
+  const label = String(action.action || 'action').trim();
+  const app = action.app ? ` @ ${action.app}` : '';
+  if (label === 'openUrl') return `${label}${app} ${action.url || ''}`.trim();
+  if (label === 'clickText') return `${label}${app} "${action.text || ''}"`.trim();
+  if (label === 'clickUi') return `${label}${app} "${action.target?.text || action.text || ''}"`.trim();
+  if (label === 'runShell') return `${label}${app} ${action.command || ''}`.trim();
+  if (label === 'waitFor') return `${label} ${action.condition?.type || action.condition?.app || ''}`.trim();
+  if (label === 'verify') return `${label} ${action.type || action.verify || ''}`.trim();
+  return `${label}${app}`.trim();
+}
+
+function serializeTraceForPlanner(executionTrace = []) {
+  return executionTrace.slice(-8).map((entry) => ({
+    step: entry.step,
+    action: describePlannerAction(entry.action),
+    ok: entry.ok,
+    elapsedMs: entry.elapsedMs,
+    result: {
+      action: entry.result?.action || '',
+      error: entry.result?.error || '',
+      stdout: String(entry.result?.stdout || '').slice(0, 200),
+      stderr: String(entry.result?.stderr || '').slice(0, 200),
+      strategyUsed: entry.strategyUsed || '',
+      fallbackUsed: entry.fallbackUsed || '',
+    },
+  }));
+}
+
+function buildHeuristicRepairPlan({ task = '', plan = {}, failedStep = null, observations = '' } = {}) {
+  const failedAction = failedStep?.action || {};
+  const failedType = String(failedAction.action || '').toLowerCase();
+  const app = String(failedAction.app || failedAction.target?.app || '').trim();
+  const targetText = String(failedAction.target?.text || failedAction.text || '').trim();
+  const command = String(failedAction.command || failedAction.script || '').trim();
+  const repairActions = [];
+
+  if (app) {
+    repairActions.push({ action: 'focus', app });
+    repairActions.push({
+      action: 'waitFor',
+      timeoutMs: 2000,
+      sleepMs: 250,
+      condition: { type: 'frontmostApp', app },
+    });
+  }
+
+  if (failedType === 'clickui' || failedType === 'clicktext') {
+    repairActions.push({
+      action: 'clickUi',
+      app: app || failedAction.app || '',
+      target: {
+        text: targetText || failedAction.text || '',
+        role: failedAction.target?.role || '',
+        strategy: 'hybrid',
+      },
+    });
+  } else if (failedType === 'runshell' && command) {
+    repairActions.push({
+      action: 'runShell',
+      app: app || failedAction.app || '',
+      command,
+      inFocusedTerminal: true,
+    });
+  } else if (failedType === 'verify') {
+    const verifyType = String(failedAction.type || failedAction.verify || '').toLowerCase();
+    if ((verifyType === 'shell' || verifyType === 'terminaloutputvisible' || verifyType === 'terminalvisible' || verifyType === 'shellvisible') && command) {
+      repairActions.push({
+        action: 'runShell',
+        app: app || failedAction.app || '',
+        command,
+        inFocusedTerminal: true,
+      });
+      repairActions.push({
+        action: 'verify',
+        type: verifyType === 'shell' ? 'shell' : 'terminalOutputVisible',
+        command,
+      });
+    } else if (verifyType === 'screentextcontains' && targetText) {
+      repairActions.push({
+        action: 'waitFor',
+        timeoutMs: 2000,
+        sleepMs: 250,
+        condition: { type: 'screenTextContains', text: targetText },
+      });
+    }
+  }
+
+  if (!repairActions.length) {
+    repairActions.push({ action: 'probe' });
+  }
+
+  return {
+    summary: `${plan?.summary || task || 'computer use task'} - repair`,
+    actions: repairActions,
+    observations,
+  };
+}
+
+async function buildRepairPlan({ task = '', contextText = '', plan = {}, failedStep = null, executionTrace = [] } = {}) {
+  const probe = await probeAutomation().catch(() => null);
+  const screenText = String(probe?.screenRecording?.text || '').trim();
+  const observations = [
+    `Task: ${task || plan?.summary || 'computer use task'}`,
+    `Failed step: ${describePlannerAction(failedStep?.action || {})}`,
+    `Failure: ${failedStep?.result?.error || failedStep?.result?.stderr || failedStep?.result?.stdout || 'unknown'}`,
+    probe?.frontmost?.ok ? `Frontmost: ${probe.frontmost.stdout || probe.frontmost.app || ''}` : '',
+    probe?.screenRecording?.path ? `Screenshot: ${probe.screenRecording.path}` : '',
+    screenText ? `Screen OCR: ${screenText.slice(0, 1500)}` : '',
+    contextText ? `Context: ${contextText}` : '',
+  ].filter(Boolean).join('\n');
+
+  const heuristicPlan = buildHeuristicRepairPlan({ task, plan, failedStep, observations });
+  const systemPrompt = [
+    'You are OpenHermes computer-use repair planner.',
+    'Return a compact JSON object only.',
+    'No markdown, no prose, no code fences.',
+    'Use the provided observations to produce the smallest corrective action sequence that can recover from the failure.',
+    'Prefer frontmost app checks, UI re-focus, or alternative click strategies before retrying a command.',
+    'Always end with a verification action when it helps confirm success.',
+    'Schema: {"summary":"...", "actions":[{"action":"launch|focus|openUrl|waitFor|clickUi|clickText|clickCoordinates|type|press|shortcut|runShell|verify|clickMenuItem|openSystemPane|probe|activateWindow","app":"...","url":"...","text":"...","pane":"...","command":"...","inFocusedTerminal":true,"timeoutMs":1000,"sleepMs":1000,"target":{"text":"...","role":"...","selector":"...","coords":{"x":0,"y":0}},"shortcut":{"key":"...","modifiers":["command","shift"]},"menuPath":{"menu":"...","item":"...","subItem":"..."},"selectorOrCoords":{"x":0,"y":0},"condition":{"type":"frontmostApp|windowTitleContains|screenTextContains|appRunning|shell","app":"...","text":"...","command":"..."}}]}\nUse verify type \"terminalOutputVisible\" when the command output must be confirmed on screen.',
+  ].join(' ');
+
+  const response = await forwardChat({
+    stream: false,
+    temperature: 0,
+    max_tokens: 512,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      {
+        role: 'user',
+        content: [
+          `Task: ${task || plan?.summary || 'computer use task'}`,
+          `Original plan: ${JSON.stringify(plan, null, 2)}`,
+          `Failed step: ${JSON.stringify(failedStep || {}, null, 2)}`,
+          `Trace: ${JSON.stringify(serializeTraceForPlanner(executionTrace), null, 2)}`,
+          `Observations:\n${observations}`,
+        ].join('\n\n'),
+      },
+    ],
+  });
+
+  const bodyText = await response.text();
+  if (!response.ok) {
+    return heuristicPlan;
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(extractJsonBlock(bodyText) || bodyText);
+  } catch {
+    parsed = null;
+  }
+
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.actions) || !parsed.actions.length) {
+    return heuristicPlan;
+  }
+
+  if (!parsed.summary) {
+    parsed.summary = heuristicPlan.summary;
+  }
+
+  parsed.observations = observations;
+  return parsed;
+}
+
 async function buildControlPlan(promptText, contextText = '') {
   const heuristicPlan = inferControlPlan(promptText, contextText);
   if (heuristicPlan.actions.some((action) => action.action !== 'probe')) {
@@ -376,10 +576,11 @@ async function buildControlPlan(promptText, contextText = '') {
     'You are OpenHermes computer-use planner.',
     'Convert the user request into a compact JSON object only.',
     'No markdown, no prose, no code fences.',
-    'Schema: {"summary":"...", "actions":[{"action":"launch|focus|openUrl|waitFor|clickUi|clickText|clickCoordinates|type|press|shortcut|runShell|verify|clickMenuItem|openSystemPane|probe|activateWindow", "app":"...", "url":"...", "text":"...", "pane":"...", "command":"...", "inFocusedTerminal":true, "timeoutMs":1000, "sleepMs":1000, "target":{"text":"...","role":"...","selector":"...","coords":{"x":0,"y":0}}, "shortcut":{"key":"...","modifiers":["command","shift"]}, "menuPath":{"menu":"...","item":"...","subItem":"..."}, "selectorOrCoords":{"x":0,"y":0}}]}',
+    'Schema: {"summary":"...", "actions":[{"action":"launch|focus|openUrl|waitFor|clickUi|clickText|clickCoordinates|type|press|shortcut|runShell|verify|clickMenuItem|openSystemPane|probe|activateWindow", "app":"...", "url":"...", "text":"...", "pane":"...", "command":"...", "inFocusedTerminal":true, "timeoutMs":1000, "sleepMs":1000, "target":{"text":"...","role":"...","selector":"...","coords":{"x":0,"y":0}}, "shortcut":{"key":"...","modifiers":["command","shift"]}, "menuPath":{"menu":"...","item":"...","subItem":"..."}, "selectorOrCoords":{"x":0,"y":0}, "condition":{"type":"frontmostApp|windowTitleContains|screenTextContains|appRunning|shell","app":"...","text":"...","command":"..."}}]}\nUse verify type "terminalOutputVisible" when the command output must be confirmed on screen.',
     'Use Chrome for web requests when a browser is requested.',
     'Use clickText or clickUi for button or link clicks in browser and app UIs.',
     'Use runShell with inFocusedTerminal=true for terminal pane commands in editors such as Zed.',
+    'Use verify type "terminalOutputVisible" when you need to confirm that terminal output appears on screen, not just that the command is valid.',
     'Prefer the smallest action sequence that achieves the goal.',
     'If the request cannot be safely executed, return {"summary":"...", "actions":[{"action":"probe"}]}.',
   ].join(' ');
@@ -420,37 +621,89 @@ async function buildControlPlan(promptText, contextText = '') {
   return parsed;
 }
 
-async function executeControlPlan(plan) {
+async function executeControlPlan(plan, options = {}) {
   const results = [];
   const executionTrace = [];
-  const actions = Array.isArray(plan.actions) ? plan.actions : [];
-  let finalStatus = actions.length ? 'completed' : 'noop';
+  const task = String(options.task || plan?.summary || '').trim();
+  const contextText = String(options.contextText || options.context || '').trim();
+  const maxRepairRounds = Math.max(0, Number(options.maxRepairRounds ?? 2));
+  const allowRepair = options.allowRepair !== false;
+  let currentPlan = plan;
+  let finalStatus = 'noop';
   let failedStep = null;
+  let repairRounds = 0;
 
-  for (const [index, action] of actions.entries()) {
-    const startedAt = Date.now();
-    const result = await executeAutomationAction(action);
-    const traceEntry = {
-      step: index + 1,
-      action,
-      result,
-      ok: result?.ok !== false,
-      elapsedMs: Date.now() - startedAt,
-      strategyUsed: result?.strategyUsed || result?.mode || '',
-      fallbackUsed: result?.fallbackUsed || '',
-    };
-    results.push({ action, result });
-    executionTrace.push(traceEntry);
-    if (result?.ok === false) {
-      finalStatus = 'failed';
-      failedStep = traceEntry;
+  for (let round = 0; round <= maxRepairRounds; round += 1) {
+    const actions = Array.isArray(currentPlan?.actions) ? currentPlan.actions : [];
+    if (!actions.length) {
+      finalStatus = 'noop';
       break;
     }
+
+    let roundFailed = null;
+    for (const action of actions) {
+      const startedAt = Date.now();
+      const result = await executeAutomationAction(action);
+      const traceEntry = {
+        step: results.length + 1,
+        round,
+        action,
+        result,
+        ok: result?.ok !== false,
+        elapsedMs: Date.now() - startedAt,
+        strategyUsed: result?.strategyUsed || result?.mode || '',
+        fallbackUsed: result?.fallbackUsed || '',
+      };
+      results.push({ action, result, round });
+      executionTrace.push(traceEntry);
+      if (result?.ok === false) {
+        roundFailed = traceEntry;
+        failedStep = traceEntry;
+        break;
+      }
+    }
+
+    if (!roundFailed) {
+      finalStatus = results.length ? 'completed' : 'noop';
+      break;
+    }
+
+    if (!allowRepair || round >= maxRepairRounds) {
+      finalStatus = 'failed';
+      break;
+    }
+
+    repairRounds += 1;
+    const repairPlan = await buildRepairPlan({
+      task,
+      contextText,
+      plan: currentPlan,
+      failedStep: roundFailed,
+      executionTrace,
+    });
+    executionTrace.push({
+      step: `${round + 1}.repair`,
+      round,
+      action: {
+        action: 'repairPlan',
+        summary: repairPlan.summary,
+      },
+      result: {
+        ok: true,
+        action: 'repairPlan',
+        plan: repairPlan,
+      },
+      ok: true,
+      elapsedMs: 0,
+      strategyUsed: 'repair',
+    });
+    currentPlan = repairPlan;
   }
 
   results.executionTrace = executionTrace;
   results.finalStatus = finalStatus;
   results.failedStep = failedStep;
+  results.repairRounds = repairRounds;
   return results;
 }
 
@@ -526,6 +779,7 @@ function makeExecutionResponse(requestRecord, plan, executionResults = [], extra
     executionTrace: extra.executionTrace || executionResults.executionTrace || [],
     finalStatus: extra.finalStatus || executionResults.finalStatus || 'completed',
     failedStep: extra.failedStep || executionResults.failedStep || null,
+    repairRounds: extra.repairRounds || executionResults.repairRounds || 0,
     executionSummary: summarizeExecutionResults(executionResults),
     ...extra,
   };
@@ -568,7 +822,7 @@ async function executeControlRequest({
   reply = '',
 }) {
   const plan = await buildControlPlan(task, body.context || '');
-  const executionResults = await executeControlPlan(plan);
+  const executionResults = await executeControlPlan(plan, { task, contextText: body.context || '' });
   const now = new Date().toISOString();
   const requestRecord = await createQueuedRequest(requestStorePath, {
     kind: 'control',
@@ -588,6 +842,7 @@ async function executeControlRequest({
     executionTrace: executionResults.executionTrace || [],
     finalStatus: executionResults.finalStatus || 'completed',
     failedStep: executionResults.failedStep || null,
+    repairRounds: executionResults.repairRounds || 0,
     executionSummary: summarizeExecutionResults(executionResults),
     executionError: '',
     auth: auth ? { required: auth.required, mode: auth.mode, loopback: auth.loopback, remoteAddress: auth.remoteAddress } : null,
@@ -599,6 +854,7 @@ async function executeControlRequest({
     executionTrace: executionResults.executionTrace || [],
     finalStatus: executionResults.finalStatus || 'completed',
     failedStep: executionResults.failedStep || null,
+    repairRounds: executionResults.repairRounds || 0,
   };
 }
 
@@ -619,7 +875,7 @@ async function autoExecutePendingRequestsOnBoot() {
 
     try {
       const plan = pending.plan || await buildControlPlan(pending.task || pending.summary || '', pending.payload?.context || '');
-      const executionResults = await executeControlPlan(plan);
+      const executionResults = await executeControlPlan(plan, { task: pending.task || pending.summary || '', contextText: pending.payload?.context || '' });
       await updateQueuedRequest(requestStorePath, pending.id, (record) => ({
         ...record,
         status: 'executed',
@@ -630,6 +886,7 @@ async function autoExecutePendingRequestsOnBoot() {
         executionTrace: executionResults.executionTrace || [],
         finalStatus: executionResults.finalStatus || 'completed',
         failedStep: executionResults.failedStep || null,
+        repairRounds: executionResults.repairRounds || 0,
         executionSummary: summarizeExecutionResults(executionResults),
         executionError: '',
       })).catch(() => null);
@@ -700,7 +957,7 @@ async function approveQueuedRequest(requestId, { request = null, auth = null, bo
   }), requestId);
 
   const plan = approved.plan || await buildControlPlan(approved.task || approved.summary || '', approved.payload?.context || '');
-  const executionResults = await executeControlPlan(plan);
+  const executionResults = await executeControlPlan(plan, { task: approved.task || approved.summary || '', contextText: approved.payload?.context || '' });
   const executed = await persistRequestRecord((record) => ({
     ...record,
     status: 'executed',
@@ -711,6 +968,7 @@ async function approveQueuedRequest(requestId, { request = null, auth = null, bo
     executionTrace: executionResults.executionTrace || [],
     finalStatus: executionResults.finalStatus || 'completed',
     failedStep: executionResults.failedStep || null,
+    repairRounds: executionResults.repairRounds || 0,
     executionSummary: summarizeExecutionResults(executionResults),
     executionError: '',
   }), requestId);
@@ -1291,7 +1549,7 @@ const server = http.createServer(async (request, response) => {
       let failedStep = null;
       let requestRecord = null;
       if (!previewOnly) {
-        executionResults = await executeControlPlan(plan);
+        executionResults = await executeControlPlan(plan, { task, contextText: body.context || '' });
         executionTrace = executionResults.executionTrace || [];
         finalStatus = executionResults.finalStatus || 'completed';
         failedStep = executionResults.failedStep || null;
@@ -1329,6 +1587,7 @@ const server = http.createServer(async (request, response) => {
         executionTrace,
         finalStatus,
         failedStep,
+        repairRounds: executionResults.repairRounds || 0,
         auth,
         request: requestRecord,
       };

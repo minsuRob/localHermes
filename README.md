@@ -205,6 +205,9 @@ node scripts/check-hermes-local.mjs
 4. 요청이 들어오면 Hermes가 macOS 자동화를 실행하고 결과가 감사 로그에 남습니다.
 
 웹 UI의 `Computer Use` 패널은 실제 프롬프트 창입니다. 예를 들어 `Chrome으로 daum.net 열어줘`를 넣고 실행하면, Hermes가 계획을 만들고 macOS 자동화가 실제로 실행됩니다.
+최근에는 실행 뒤에 `frontmost app`, `window title`, `screen OCR`, `terminal output visible`, `shell verify`를 다시 확인하는 루프를 넣어서, 실패 시에는 재계획을 한 번 더 시도하도록 개선했습니다.
+
+Zed 시나리오는 `+` 버튼을 먼저 누르고, `ls -la` 같은 명령을 터미널에 넣은 다음, 화면 OCR과 터미널 출력 가시성 검증, 셸 검증으로 결과를 확인하는 흐름을 기본으로 사용합니다.
 
 주의:
 

@@ -246,8 +246,8 @@ async function checkProxy() {
     },
     {
       name: 'Control preview - Zed shell command',
-      task: 'Zed에서, "printing-landing — zsh" 적힌 cmd 창에서, 현재 폴더 리스트를 조회하는 명령어를 실행',
-      expected: ['launch', 'focus', 'waitFor', 'runShell'],
+      task: 'Zed에서, "printing-landing — zsh" 적힌 cmd 창의 + 버튼을 눌러서 현재 폴더 리스트를 조회하는 명령어를 실행하고, 결과를 검증해.',
+      expected: ['launch', 'focus', 'waitFor', 'clickUi', 'waitFor', 'runShell', 'verify'],
     },
   ];
 
