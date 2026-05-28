@@ -17,6 +17,8 @@
 | `macos-automator.json` | `@steipete/macos-automator-mcp` | Chrome/앱 AppleScript 제어 |
 | `chrome-devtools.json` | `chrome-devtools-mcp` | 실제 Chrome CDP 탭 자동화 |
 | `shell.json` | `@mako10k/mcp-shell-server` | 터미널 명령 실행 (고위험) |
+| `local-memory.json` | 로컬 Node 서버 | 파일 기반 메모리/노트 저장 |
+| `local-status.json` | 로컬 Node 서버 | macOS/Tailscale/Hermes 상태 진단 |
 
 비활성 샘플: `sqlite.json`, `github.json` (`disabled: true`)
 
@@ -88,3 +90,12 @@ ln -s ../servers/macos-automator.json enabled/macos-automator.json
 - [ ] Chrome 탭 자동화 시 `scripts/start-chrome-debug.sh` 실행 후 CDP(9222) 응답 확인
 - [ ] macOS TCC 권한 부여 완료
 - [ ] 비활성화 시 로딩에서 제외됨
+
+## 로컬 확장 MCP
+
+이 저장소에는 인증이 필요 없는 로컬 서버도 포함됩니다.
+
+- `local-memory`: 임시 노트 저장 및 smoke test 용도
+- `local-status`: Hermes, proxy, Tailscale 상태 확인 용도
+
+이 서버들은 `scripts/mcp-bridge-ports.json`와 `mcp/enabled/`를 함께 갱신해 브리지 테스트에 바로 포함됩니다.

@@ -22,5 +22,8 @@ Icon
 
 # Local npm deps for setup/test scripts
 node_modules/
-package-lock.json
 logs
+.env
+.env.local
+.env.*.local
+dist/

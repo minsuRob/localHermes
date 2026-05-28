@@ -1,0 +1,9 @@
+{
+  "name": "local-status",
+  "command": "node",
+  "args": ["mcp/local-status-server.mjs"],
+  "env": {},
+  "cwd": "/Users/robertlee/Workspace/Personal/localHermes",
+  "timeout": 30000,
+  "disabled": false
+}

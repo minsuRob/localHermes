@@ -12,6 +12,8 @@ PORTS_FILE="${SCRIPT_DIR}/mcp-bridge-ports.json"
 PID_DIR="${ROOT_DIR}/.run/mcp-bridges"
 LOG_DIR="/tmp/localhermes-mcp-bridges"
 
+cd "${ROOT_DIR}"
+
 log_info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
 log_success() { echo -e "${GREEN}[OK]${NC}    $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }

@@ -18,5 +18,13 @@
   "shell": {
     "port": 7015,
     "stdio": "npx -y @mako10k/mcp-shell-server"
+  },
+  "local-memory": {
+    "port": 7016,
+    "stdio": "node mcp/local-memory-server.mjs"
+  },
+  "local-status": {
+    "port": 7017,
+    "stdio": "node mcp/local-status-server.mjs"
   }
 }

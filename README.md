@@ -1,17 +1,18 @@
-# Hermes Local Setup (llama.cpp + Gemma + Extensible MCP)
+# OpenHermes Local Stack (llama.cpp + React UI + Extensible MCP)
 
-이 저장소는 macOS 로컬 환경에서 `llama.cpp` + Gemma 모델로 Hermes Agent Desktop을 안정적으로 구동하고,
-MCP 서버를 파일 기반으로 자유롭게 추가/활성화/비활성화할 수 있도록 표준 구조를 제공합니다.
+이 저장소는 macOS 로컬 환경에서 `llama.cpp` 기반 Hermes와 React 웹 UI, CLI 오케스트레이션, MCP 서버 확장,
+Slack/Discord webhook 프록시, 컴퓨터 사용(computer use)형 macOS 앱 제어, 그리고 GitHub Pages 배포까지 한 번에 관리할 수 있는 표준 구조를 제공합니다.
 
 ## 1) 목표 구성
 
 - Local LLM: `llama.cpp` 서버
 - 모델: `gemma-4-E4B-it-Q5_K_M.gguf`
-- 컨텍스트 길이: **70,000 이상**
 - Hermes Base URL: `http://localhost:8080` (**`/v1` 붙이지 않음**)
-- Hermes Tools: `Web Search`, `Browser`, `Terminal`, `File Operation` 활성화
+- React UI: `npm run dev` 또는 `openhermes web`
 - MCP: `mcp/servers` + `mcp/enabled` 기반 운영
-- 활성 MCP: `filesystem`, `fetch`, `macos-automator`, `chrome-devtools`, `shell`
+- 활성 MCP: `filesystem`, `fetch`, `macos-automator`, `chrome-devtools`, `shell`, `local-memory`, `local-status`
+- 배포: GitHub Pages + `gh-pages` 브랜치
+- 컴퓨터 사용: `openhermes permissions`, `openhermes automate`
 
 ## 2) 모델 경로 환경변수
 
@@ -26,7 +27,30 @@ echo 'export MODEL_PATH=/Users/robertlee/Workspace/Personal/localclaw/model/gemm
 source ~/.zshrc
 ```
 
-## 3) llama.cpp 서버 실행 표준
+## 3) CLI
+
+`openhermes` 명령을 기준으로 로컬 서비스를 다룹니다.
+
+```bash
+npm run openhermes -- status
+npm run openhermes -- start
+npm run openhermes -- web
+npm run openhermes -- verify
+npm run openhermes -- deploy-pages --proxy-url https://<your-tailscale-funnel-url>
+```
+
+서브커맨드:
+
+- `start`: 기존 Hermes 백엔드와 MCP 브리지 시작
+- `web`: React UI + API 프록시 시작
+- `status`: Hermes, 프록시, MCP 상태 요약
+- `permissions`: macOS 권한 상태 확인 또는 시스템 패널 열기
+- `automate`: 앱 실행/포커스/URL 열기/시스템 패널 제어
+- `control`: 자연어 프롬프트를 실행 계획으로 바꿔 실제 macOS 동작 실행
+- `verify`: 로컬 Hermes/LLM/MCP 검증
+- `deploy-pages`: `dist` 빌드 후 GitHub Pages 브랜치로 게시
+
+## 4) llama.cpp 서버 실행 표준
 
 아래 명령으로 서버를 실행합니다.
 
@@ -45,7 +69,7 @@ source ~/.zshrc
 - `-ngl 999`로 가능한 레이어 최대 GPU 오프로딩
 - 실행 실패 시 VRAM 상황에 맞춰 `-c` 또는 배치 옵션을 조정
 
-## 4) Hermes Agent Desktop 모델 연동
+## 5) Hermes Agent Desktop 모델 연동
 
 Hermes 앱에서 다음처럼 추가합니다.
 
@@ -55,7 +79,7 @@ Hermes 앱에서 다음처럼 추가합니다.
 4. `Model ID`: 실제 로드된 모델명 입력
 5. `API Key`: 공란
 
-## 5) Hermes Tools 활성화 체크리스트
+## 6) Hermes Tools 활성화 체크리스트
 
 `Tools` 탭에서 아래 항목을 모두 `ON`으로 변경합니다.
 
@@ -64,7 +88,7 @@ Hermes 앱에서 다음처럼 추가합니다.
 - `Terminal`
 - `File Operation`
 
-## 6) MCP 운영 구조
+## 7) MCP 운영 구조
 
 이 저장소는 MCP를 아래 규약으로 운영합니다.
 
@@ -80,7 +104,7 @@ Hermes 앱에서 다음처럼 추가합니다.
 
 자세한 사용법은 [`mcp/README.md`](./mcp/README.md)를 참고하세요.
 
-## 6-1) Chrome 및 macOS 권한 MCP
+## 7-1) Chrome 및 macOS 권한 MCP
 
 실제 Chrome 앱(로그인·프로필 유지)과 macOS 앱/터미널 제어를 위해 아래 MCP가 활성화되어 있습니다.
 
@@ -123,7 +147,7 @@ Hermes(또는 Hermes를 실행하는 Node/npx)에 아래 권한을 부여한 뒤
 
 - `shell` MCP는 호스트에서 임의 명령을 실행할 수 있습니다. 로컬 전용·신뢰된 모델만 사용하세요.
 
-## 7) 체크 스크립트
+## 8) 체크 스크립트
 
 비파괴 검증은 아래 스크립트로 실행합니다.
 
@@ -135,6 +159,7 @@ node scripts/check-hermes-local.mjs
 
 - `mcp/servers`와 `mcp/enabled`의 JSON 형식 및 활성 링크 검증
 - Chrome CDP(9222) 응답 여부 INFO 출력 (미응답 시 FAIL 아님)
+- Proxy 건강 상태(`/api/health`) 확인
 - `MODEL_PATH` 존재 여부 확인
 - `http://127.0.0.1:8080/v1/chat/completions`에 샘플 프롬프트 전송
 - 응답이 `READY` 계열이면 성공으로 판정
@@ -148,7 +173,7 @@ MODEL_PATH=/Users/robertlee/Workspace/Personal/localclaw/model/gemma-4-E4B-it-Q5
 node scripts/check-hermes-local.mjs
 ```
 
-## 8) 빠른 점검
+## 9) 빠른 점검
 
 1. llama.cpp 서버 실행 후 `localhost:8080`에서 응답 확인
 2. Hermes에서 해당 모델 선택 후 단문/다중턴 질문 테스트
@@ -156,7 +181,28 @@ node scripts/check-hermes-local.mjs
 4. MCP 추가/활성화 후 Hermes 재시작하여 인식 확인
 5. macOS TCC 권한 부여 후 Chrome/앱 제어 테스트
 
-## 9) 범위
+## 10) GitHub Pages
+
+배포 흐름은 다음과 같습니다.
+
+1. `npm install`
+2. `npm run build`
+3. `npm run deploy:pages`
+
+`deploy:pages`는 `gh-pages` 브랜치에 정적 파일을 게시하고, Pages 설정이 없으면 `gh api`로 초기화합니다.
+
+`VITE_PROXY_URL` 또는 `OPENHERMES_PROXY_URL`을 설정하면 Pages 빌드에 그 URL이 기본값으로 들어갑니다.
+`OPENHERMES_API_TOKEN` / `OPENHERMES_API_SECRET`을 설정하면 `chat`, `control`, `permissions`, `automate`, `audit` 같은 보호된 엔드포인트가 서명 검증을 요구합니다. 로컬 루프백에서는 편의를 위해 무서명 허용이 남아 있습니다.
+
+웹 UI의 `Computer Use` 패널은 실제 프롬프트 창입니다. 예를 들어 `Chrome으로 daum.net 열어줘`를 넣고 실행하면, Hermes가 계획을 만들고 macOS 자동화가 실제로 실행됩니다.
+
+주의:
+
+- 공개 GitHub Pages에서 브라우저가 `localhost`나 Tailscale/private 네트워크 프록시를 직접 호출하면 브라우저 정책상 차단될 수 있습니다.
+- 이 경우 UI는 연결 실패를 에러로 터뜨리기보다, 로컬 모드 사용 또는 공개 릴레이 연결을 안내합니다.
+- 실제 대화/맥 제어는 로컬 `openhermes web` 또는 브라우저 정책을 만족하는 공개 API 릴레이에서 사용하는 것이 가장 안정적입니다.
+
+## 11) 범위
 
 - 포함: 모델 연결 + Tools 활성화 + MCP 확장 구조
 - 제외: Telegram/스케줄러(필요 시 후속 확장)

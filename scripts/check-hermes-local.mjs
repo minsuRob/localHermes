@@ -3,6 +3,7 @@
 import { lstat, readdir, readFile, stat, readlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createClientAuthHeaders } from '../lib/openhermes-auth.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..');
@@ -160,6 +161,82 @@ async function checkChromeCdp() {
   pass(`Chrome CDP 응답: ${parsed.Browser || 'ready'}`);
 }
 
+async function checkProxy() {
+  const proxyUrl = (process.env.OPENHERMES_PROXY_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '');
+  const response = await fetch(`${proxyUrl}/api/health`).catch(() => null);
+  if (!response || !response.ok) {
+    info(`Proxy 미응답: ${proxyUrl}/api/health`);
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = await response.json();
+  } catch {
+    info('Proxy health 응답 파싱 실패');
+    return;
+  }
+
+  pass(`Proxy 응답: ${parsed.upstream?.ok ? 'upstream ready' : 'proxy ready'}`);
+
+  const permissionsResponse = await fetch(`${proxyUrl}/api/permissions/status`, {
+    headers: createClientAuthHeaders({
+      token: process.env.OPENHERMES_API_TOKEN || '',
+      secret: process.env.OPENHERMES_API_SECRET || '',
+      method: 'GET',
+      pathname: '/api/permissions/status',
+    }),
+  }).catch(() => null);
+  if (!permissionsResponse || !permissionsResponse.ok) {
+    info('권한 상태 API 미응답');
+    return;
+  }
+
+  const permissions = await permissionsResponse.json().catch(() => null);
+  if (permissions?.automation) {
+    pass(`권한 상태 확인: automation=${permissions.automation.state}`);
+  }
+
+  const auditResponse = await fetch(`${proxyUrl}/api/audit?limit=3`, {
+    headers: createClientAuthHeaders({
+      token: process.env.OPENHERMES_API_TOKEN || '',
+      secret: process.env.OPENHERMES_API_SECRET || '',
+      method: 'GET',
+      pathname: '/api/audit?limit=3',
+    }),
+  }).catch(() => null);
+  if (auditResponse && auditResponse.ok) {
+    pass('감사 로그 API 응답');
+  }
+
+  const controlResponse = await fetch(`${proxyUrl}/api/control`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...createClientAuthHeaders({
+        token: process.env.OPENHERMES_API_TOKEN || '',
+        secret: process.env.OPENHERMES_API_SECRET || '',
+        method: 'POST',
+        pathname: '/api/control',
+        body: {
+          task: 'Chrome으로 daum.net 열어줘',
+          execute: false,
+        },
+      }),
+    },
+    body: JSON.stringify({
+      task: 'Chrome으로 daum.net 열어줘',
+      execute: false,
+    }),
+  }).catch(() => null);
+  if (controlResponse && controlResponse.ok) {
+    const control = await controlResponse.json().catch(() => null);
+    if (control?.plan?.actions?.length) {
+      pass(`Control preview 응답: ${control.plan.actions.length} action(s)`);
+    }
+  }
+}
+
 async function checkHermesApi() {
   if (!(await exists(MODEL_PATH))) {
     throw new Error(`MODEL_PATH 파일이 없습니다: ${MODEL_PATH}`);
@@ -226,6 +303,7 @@ async function main() {
     await checkMcpDirectory('templates');
     await checkEnabledLinks();
     await checkChromeCdp();
+    await checkProxy();
     await checkHermesApi();
   } catch (error) {
     fail(error.message || String(error));
