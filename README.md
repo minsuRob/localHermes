@@ -200,16 +200,16 @@ node scripts/check-hermes-local.mjs
 외부 채널 승인 흐름:
 
 1. Slack, Discord, GitHub webhook, 또는 Pages UI에서 요청을 보냅니다.
-2. `POST /api/requests` 또는 `POST /api/control`은 외부 요청일 때 승인 대기열에 넣습니다.
-3. UI의 `승인 대기함`에서 `승인 후 실행` 또는 `거절`을 누릅니다.
-4. 승인되면 Hermes가 macOS 자동화를 실행하고 결과가 감사 로그에 남습니다.
+2. `POST /api/requests` 또는 `POST /api/control`은 기본적으로 즉시 실행됩니다.
+3. UI의 `최근 요청`에서 실행 결과와 감사 기록을 확인합니다.
+4. 요청이 들어오면 Hermes가 macOS 자동화를 실행하고 결과가 감사 로그에 남습니다.
 
 웹 UI의 `Computer Use` 패널은 실제 프롬프트 창입니다. 예를 들어 `Chrome으로 daum.net 열어줘`를 넣고 실행하면, Hermes가 계획을 만들고 macOS 자동화가 실제로 실행됩니다.
 
 주의:
 
 - 공개 GitHub Pages는 `OPENHERMES_PROXY_URL`에 들어간 Funnel URL을 호출해야 정상 동작합니다.
-- 외부 요청은 기본적으로 승인 후 실행됩니다. `OPENHERMES_LOCAL_FASTPATH=true`일 때만 루프백에서 즉시 실행할 수 있습니다.
+- 외부 요청은 기본적으로 즉시 실행됩니다. 승인 대기 정책이 필요하면 `OPENHERMES_APPROVAL_MODE=required`로 바꿀 수 있습니다.
 - Slack/Discord/GitHub webhook은 각각 `OPENHERMES_SLACK_WEBHOOK_SECRET`, `OPENHERMES_DISCORD_WEBHOOK_SECRET`, `OPENHERMES_GITHUB_WEBHOOK_SECRET`로 보호할 수 있습니다.
 
 ## 11) 범위

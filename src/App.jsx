@@ -314,42 +314,6 @@ export default function App() {
     }
   }
 
-  async function approveQueuedRequest(requestId) {
-    if (!requestId) return;
-    setActionStatus(`승인 중: ${requestId}`);
-    try {
-      const payload = await apiRequest(`/api/requests/${requestId}/approve`, {
-        method: 'POST',
-        body: {},
-      });
-      setActionStatus(`승인 및 실행 완료: ${requestId}`);
-      await refreshRequestQueue();
-      await refreshAudit();
-      return payload;
-    } catch (error) {
-      setActionStatus(`승인 실패: ${error.message || String(error)}`);
-      return null;
-    }
-  }
-
-  async function rejectQueuedRequest(requestId) {
-    if (!requestId) return;
-    setActionStatus(`거절 중: ${requestId}`);
-    try {
-      const payload = await apiRequest(`/api/requests/${requestId}/reject`, {
-        method: 'POST',
-        body: { reason: 'Rejected from UI' },
-      });
-      setActionStatus(`거절 완료: ${requestId}`);
-      await refreshRequestQueue();
-      await refreshAudit();
-      return payload;
-    } catch (error) {
-      setActionStatus(`거절 실패: ${error.message || String(error)}`);
-      return null;
-    }
-  }
-
   async function submitComputerPrompt(event) {
     event?.preventDefault?.();
     const prompt = computerPrompt.trim();
@@ -365,7 +329,7 @@ export default function App() {
         },
       });
       setComputerResult(payload);
-      setActionStatus(payload?.queued ? `승인 대기: ${payload?.summary || prompt}` : `완료: ${payload?.summary || prompt}`);
+      setActionStatus(payload?.queued ? `대기: ${payload?.summary || prompt}` : `완료: ${payload?.summary || prompt}`);
       await refreshRequestQueue();
       await refreshAudit();
       return payload;
@@ -515,7 +479,7 @@ export default function App() {
         });
         const summary = response?.summary || '컴퓨터 제어를 실행했습니다.';
         const content = response?.queued
-          ? `${summary}\n\n승인 대기 중입니다.\nrequestId: ${response?.request?.id || response?.requestId || 'unknown'}\n${JSON.stringify(response?.request || response, null, 2)}`
+          ? `${summary}\n\n실행 대기 중입니다.\nrequestId: ${response?.request?.id || response?.requestId || 'unknown'}\n${JSON.stringify(response?.request || response, null, 2)}`
           : `${summary}\n\n${JSON.stringify(response?.plan || response, null, 2)}`;
         updateActiveSession((session) => ({
           ...session,
@@ -529,7 +493,7 @@ export default function App() {
               : message,
           ),
         }));
-        setActionStatus(response?.queued ? `승인 대기: ${summary}` : `컴퓨터 제어 완료: ${summary}`);
+        setActionStatus(response?.queued ? `대기: ${summary}` : `컴퓨터 제어 완료: ${summary}`);
         await refreshRequestQueue();
         await refreshAudit();
         setSending(false);
@@ -776,8 +740,8 @@ export default function App() {
               <section className="railCard railCardCompact">
                 <div className="railHeader">
                   <div>
-                    <div className="sectionLabel">승인 대기함</div>
-                    <h3>외부 요청 큐</h3>
+                    <div className="sectionLabel">최근 요청</div>
+                    <h3>외부 요청 실행 기록</h3>
                   </div>
                   <button className="ghostButton" type="button" onClick={refreshRequestQueue}>
                     새로고침
@@ -785,13 +749,12 @@ export default function App() {
                 </div>
                 <div className="queueList">
                   {requestQueue.length ? requestQueue.map((request) => {
-                    const statusClass = String(request.status || 'pending').toLowerCase();
-                    const canAct = statusClass === 'pending' || statusClass === 'approved';
+                    const statusClass = String(request.status || 'executed').toLowerCase();
                     return (
                       <article key={request.id} className="queueItem">
                         <div className="queueTop">
                           <div className="queueMeta">
-                            <span className={`queueBadge ${statusClass}`}>{request.status || 'pending'}</span>
+                            <span className={`queueBadge ${statusClass}`}>{request.status || 'executed'}</span>
                             <span className="queueSource">{request.sourceLabel || request.source || 'request'}</span>
                           </div>
                           <span className="queueTime">{formatTime(request.updatedAt || request.createdAt)}</span>
@@ -800,23 +763,12 @@ export default function App() {
                         <div className="queueSub">
                           {request.requestId || request.id}
                           {request.plan?.actions?.length ? ` · ${request.plan.actions.length} actions` : ''}
-                        </div>
-                        <div className="queueActions">
-                          {canAct && (
-                            <button type="button" className="railButton" onClick={() => approveQueuedRequest(request.id)}>
-                              승인 후 실행
-                            </button>
-                          )}
-                          {statusClass === 'pending' && (
-                            <button type="button" className="railButton" onClick={() => rejectQueuedRequest(request.id)}>
-                              거절
-                            </button>
-                          )}
+                          {request.executionSummary ? ` · ${request.executionSummary}` : ''}
                         </div>
                       </article>
                     );
                   }) : (
-                    <div className="emptyAudit">대기 중인 요청이 없습니다.</div>
+                    <div className="emptyAudit">최근 요청이 없습니다.</div>
                   )}
                 </div>
               </section>

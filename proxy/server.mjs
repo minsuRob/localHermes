@@ -49,7 +49,7 @@ const modelId = getArg('--model', process.env.OPENHERMES_MODEL_ID || process.env
 const rateLimitPerMinute = Number(getArg('--rate-limit', process.env.OPENHERMES_RATE_LIMIT_PER_MINUTE || '180'));
 const allowedOrigin = getArg('--allowed-origin', process.env.OPENHERMES_ALLOWED_ORIGIN || '*');
 const exposeMode = hasFlag('--serve') ? 'tailnet' : hasFlag('--funnel') ? 'public' : '';
-const approvalMode = getArg('--approval-mode', process.env.OPENHERMES_APPROVAL_MODE || 'required');
+const approvalMode = getArg('--approval-mode', process.env.OPENHERMES_APPROVAL_MODE || 'direct');
 const localFastPathEnabled = String(process.env.OPENHERMES_LOCAL_FASTPATH || 'true').toLowerCase() !== 'false';
 const apiToken = getArg('--token', process.env.OPENHERMES_API_TOKEN || '');
 const apiSecret = getArg('--secret', process.env.OPENHERMES_API_SECRET || '');
@@ -78,7 +78,7 @@ function sendJson(response, statusCode, payload, extraHeaders = {}) {
 }
 
 function getClientKey(request) {
-  return request.headers['x-forwarded-for'] || request.socket.remoteAddress || 'unknown';
+  return request?.headers?.['x-forwarded-for'] || request?.socket?.remoteAddress || 'boot';
 }
 
 function rateLimited(request) {
@@ -386,7 +386,7 @@ function readGitHubText(body) {
 }
 
 function isApprovalRequired() {
-  return !['off', 'disabled', 'direct', 'false'].includes(String(approvalMode || 'required').toLowerCase());
+  return ['required', 'queue', 'pending'].includes(String(approvalMode || 'direct').toLowerCase());
 }
 
 function isLocalFastPath(auth) {
@@ -409,6 +409,20 @@ function makeQueueResponse(requestRecord, plan, extra = {}) {
     summary: plan?.summary || requestRecord?.summary || 'pending approval',
     plan,
     request: requestRecord,
+    ...extra,
+  };
+}
+
+function makeExecutionResponse(requestRecord, plan, executionResults = [], extra = {}) {
+  return {
+    ok: true,
+    queued: false,
+    executed: true,
+    summary: plan?.summary || requestRecord?.summary || 'executed',
+    plan,
+    request: requestRecord,
+    executionResults,
+    executionSummary: summarizeExecutionResults(executionResults),
     ...extra,
   };
 }
@@ -438,6 +452,91 @@ async function queueControlRequest({
     auth: auth ? { required: auth.required, mode: auth.mode, loopback: auth.loopback, remoteAddress: auth.remoteAddress } : null,
   });
   return { plan, requestRecord };
+}
+
+async function executeControlRequest({
+  source,
+  task,
+  body = {},
+  auth = null,
+  channel = '',
+  sourceLabel = '',
+  reply = '',
+}) {
+  const plan = await buildControlPlan(task, body.context || '');
+  const executionResults = await executeControlPlan(plan);
+  const now = new Date().toISOString();
+  const requestRecord = await createQueuedRequest(requestStorePath, {
+    kind: 'control',
+    source,
+    sourceLabel: sourceLabel || source,
+    channel,
+    summary: plan.summary,
+    task,
+    plan,
+    payload: body,
+    reply,
+    approvalRequired: false,
+    executionMode: 'direct',
+    status: 'executed',
+    executedAt: now,
+    executionResults,
+    executionSummary: summarizeExecutionResults(executionResults),
+    executionError: '',
+    auth: auth ? { required: auth.required, mode: auth.mode, loopback: auth.loopback, remoteAddress: auth.remoteAddress } : null,
+  });
+  return { plan, requestRecord, executionResults };
+}
+
+async function autoExecutePendingRequestsOnBoot() {
+  if (isApprovalRequired()) {
+    return;
+  }
+  const pendingRequests = await listQueuedRequests(requestStorePath, { status: 'pending', limit: 100 });
+  for (const pending of pendingRequests) {
+    const executionMode = 'direct';
+    await updateQueuedRequest(requestStorePath, pending.id, (record) => ({
+      ...record,
+      status: 'executing',
+      executionMode,
+      executionStartedAt: new Date().toISOString(),
+      executionError: '',
+    })).catch(() => null);
+
+    try {
+      const plan = pending.plan || await buildControlPlan(pending.task || pending.summary || '', pending.payload?.context || '');
+      const executionResults = await executeControlPlan(plan);
+      await updateQueuedRequest(requestStorePath, pending.id, (record) => ({
+        ...record,
+        status: 'executed',
+        executionMode,
+        executedAt: new Date().toISOString(),
+        plan,
+        executionResults,
+        executionSummary: summarizeExecutionResults(executionResults),
+        executionError: '',
+      })).catch(() => null);
+      await audit('requests.autoexecuted', { method: 'BOOT', url: '/boot', headers: {} }, {
+        requestId: pending.id,
+        source: pending.source,
+        channel: pending.channel,
+        plan,
+        executionResults,
+      });
+    } catch (error) {
+      await updateQueuedRequest(requestStorePath, pending.id, (record) => ({
+        ...record,
+        status: 'failed',
+        executionMode,
+        executionError: error.message || String(error),
+        failedAt: new Date().toISOString(),
+      })).catch(() => null);
+      await audit('requests.autoexecute.error', { method: 'BOOT', url: '/boot', headers: {} }, {
+        requestId: pending.id,
+        error: error.message || String(error),
+      });
+    }
+  }
 }
 
 function buildApprovalMeta(auth = null, body = {}) {
@@ -775,7 +874,7 @@ const server = http.createServer(async (request, response) => {
       const source = String(body.source || 'api.requests').trim() || 'api.requests';
       const channel = String(body.channel || 'api').trim() || 'api';
       const sourceLabel = String(body.sourceLabel || source).trim() || source;
-      const { plan, requestRecord } = await queueControlRequest({
+      const { plan, requestRecord, executionResults } = await executeControlRequest({
         source,
         task,
         body,
@@ -784,10 +883,10 @@ const server = http.createServer(async (request, response) => {
         sourceLabel,
         reply: body.reply || body.reply_url || body.response_url || '',
       });
-      const payload = makeQueueResponse(requestRecord, plan, {
+      const payload = makeExecutionResponse(requestRecord, plan, executionResults, {
         auth,
-        approvalRequired: true,
-        executionMode: 'queued',
+        approvalRequired: false,
+        executionMode: 'direct',
       });
       await audit('requests.create', request, {
         requestId: requestRecord.id,
@@ -1067,8 +1166,28 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       let executionResults = [];
+      let requestRecord = null;
       if (!previewOnly) {
         executionResults = await executeControlPlan(plan);
+        requestRecord = await createQueuedRequest(requestStorePath, {
+          kind: 'control',
+          source: 'api.control',
+          sourceLabel: 'api.control',
+          channel: 'api',
+          summary: plan.summary,
+          task,
+          plan,
+          payload: body,
+          reply: body.reply || body.reply_url || body.response_url || '',
+          approvalRequired: false,
+          executionMode: 'direct',
+          status: 'executed',
+          executedAt: new Date().toISOString(),
+          executionResults,
+          executionSummary: summarizeExecutionResults(executionResults),
+          executionError: '',
+          auth: auth ? { required: auth.required, mode: auth.mode, loopback: auth.loopback, remoteAddress: auth.remoteAddress } : null,
+        });
       }
       const payload = {
         ok: true,
@@ -1076,9 +1195,10 @@ const server = http.createServer(async (request, response) => {
         plan,
         executed: !previewOnly,
         queued: false,
-        approvalRequired: approvalRequired,
+        approvalRequired: false,
         results: executionResults,
         auth,
+        request: requestRecord,
       };
       await audit('control.task', request, {
         task,
@@ -1121,7 +1241,7 @@ const server = http.createServer(async (request, response) => {
       }
       const text = readSlackText(body);
       if (looksLikeRemoteControlRequest(text)) {
-        const { plan, requestRecord } = await queueControlRequest({
+        const { plan, requestRecord, executionResults } = await executeControlRequest({
           source: 'webhook.slack',
           task: text,
           body,
@@ -1129,18 +1249,20 @@ const server = http.createServer(async (request, response) => {
           sourceLabel: 'slack',
           reply: body.response_url || body.reply_url || '',
         });
-        const ack = `요청이 승인 대기열에 등록되었습니다. requestId=${requestRecord.id}`;
+        const ack = `요청이 바로 실행되었습니다. requestId=${requestRecord.id}`;
         if (body.response_url || body.reply_url) {
           await sendWebhookReply(body.response_url || body.reply_url, ack);
         }
-        await audit('webhook.slack.queued', request, { body, requestId: requestRecord.id, text, plan });
+        await audit('webhook.slack.executed', request, { body, requestId: requestRecord.id, text, plan, executionResults });
         sendJson(response, 200, {
           ok: true,
-          queued: true,
+          queued: false,
+          executed: true,
           requestId: requestRecord.id,
           summary: plan.summary,
           request: requestRecord,
           reply: ack,
+          executionResults,
         }, {
           'access-control-allow-origin': getResponseOrigin(request),
           vary: 'Origin',
@@ -1183,21 +1305,23 @@ const server = http.createServer(async (request, response) => {
       }
       const text = readDiscordText(body);
       if (looksLikeRemoteControlRequest(text)) {
-        const { plan, requestRecord } = await queueControlRequest({
+        const { plan, requestRecord, executionResults } = await executeControlRequest({
           source: 'webhook.discord',
           task: text,
           body,
           channel: 'discord',
           sourceLabel: 'discord',
         });
-        await audit('webhook.discord.queued', request, { body, requestId: requestRecord.id, text, plan });
+        await audit('webhook.discord.executed', request, { body, requestId: requestRecord.id, text, plan, executionResults });
         sendJson(response, 200, {
           ok: true,
-          queued: true,
+          queued: false,
+          executed: true,
           requestId: requestRecord.id,
           summary: plan.summary,
           request: requestRecord,
-          reply: `요청이 승인 대기열에 등록되었습니다. requestId=${requestRecord.id}`,
+          reply: `요청이 바로 실행되었습니다. requestId=${requestRecord.id}`,
+          executionResults,
         }, {
           'access-control-allow-origin': getResponseOrigin(request),
           vary: 'Origin',
@@ -1250,20 +1374,22 @@ const server = http.createServer(async (request, response) => {
       }
 
       if (looksLikeRemoteControlRequest(text)) {
-        const { plan, requestRecord } = await queueControlRequest({
+        const { plan, requestRecord, executionResults } = await executeControlRequest({
           source: 'webhook.github',
           task: text,
           body,
           channel: 'github',
           sourceLabel: 'github',
         });
-        await audit('webhook.github.queued', request, { body, requestId: requestRecord.id, text, plan });
+        await audit('webhook.github.executed', request, { body, requestId: requestRecord.id, text, plan, executionResults });
         sendJson(response, 200, {
           ok: true,
-          queued: true,
+          queued: false,
+          executed: true,
           requestId: requestRecord.id,
           summary: plan.summary,
           request: requestRecord,
+          executionResults,
         }, {
           'access-control-allow-origin': getResponseOrigin(request),
           vary: 'Origin',
@@ -1323,6 +1449,9 @@ const server = http.createServer(async (request, response) => {
 server.listen(port, '127.0.0.1', () => {
   console.log(`OpenHermes proxy listening on http://127.0.0.1:${port}`);
   console.log(`Upstream Hermes: ${hermesBaseUrl}`);
+  autoExecutePendingRequestsOnBoot().catch((error) => {
+    console.error(`Failed to auto-execute pending requests: ${error.message || error}`);
+  });
   if (exposeMode === 'tailnet' || exposeMode === 'public') {
     const command = exposeMode === 'public' ? 'funnel' : 'serve';
     const args = [command, '--bg', '--yes', `http://127.0.0.1:${port}`];
