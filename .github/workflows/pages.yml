@@ -16,9 +16,6 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      VITE_BASE: /localHermes/
-      VITE_PROXY_URL: ${{ vars.OPENHERMES_PROXY_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,6 +30,8 @@ jobs:
         run: npm ci
 
       - name: Build
+        env:
+          VITE_BASE: /localHermes/
         run: npm run build
 
       - name: Publish to gh-pages

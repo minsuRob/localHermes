@@ -4,6 +4,7 @@ const STORAGE_KEYS = {
   sessions: 'openhermes.sessions',
   activeSessionId: 'openhermes.activeSessionId',
   proxyUrl: 'openhermes.proxyUrl',
+  proxyUrlSource: 'openhermes.proxyUrlSource',
   apiToken: 'openhermes.apiToken',
   apiSecret: 'openhermes.apiSecret',
 };
@@ -74,6 +75,11 @@ function describeControlAction(action = {}) {
 function normalizeBaseUrl(value) {
   if (!value) return '';
   return value.replace(/\/+$/, '');
+}
+
+function isPublicBrowser() {
+  if (typeof window === 'undefined') return false;
+  return !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 }
 
 function looksLikeComputerUsePrompt(text) {
@@ -219,8 +225,13 @@ export default function App() {
   });
   const [draft, setDraft] = useState('');
   const [proxyUrl, setProxyUrl] = useState(() => {
+    const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
+    const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
     const configUrl = import.meta.env.VITE_PROXY_URL || window.__OPENHERMES_CONFIG__?.proxyUrl || '';
-    return normalizeBaseUrl(localStorage.getItem(STORAGE_KEYS.proxyUrl) || configUrl || 'http://127.0.0.1:8787');
+    if (isPublicBrowser()) {
+      return storedSource === 'manual' ? normalizeBaseUrl(storedUrl) : '';
+    }
+    return normalizeBaseUrl(storedUrl || configUrl || 'http://127.0.0.1:8787');
   });
   const [apiToken, setApiToken] = useState(() => localStorage.getItem(STORAGE_KEYS.apiToken) || '');
   const [apiSecret, setApiSecret] = useState(() => localStorage.getItem(STORAGE_KEYS.apiSecret) || '');
@@ -233,7 +244,11 @@ export default function App() {
   const [computerResult, setComputerResult] = useState(null);
   const [computerSending, setComputerSending] = useState(false);
   const [sending, setSending] = useState(false);
-  const [systemNote, setSystemNote] = useState('로컬 Hermes 연결 대기 중');
+  const [systemNote, setSystemNote] = useState(() => (
+    isPublicBrowser()
+      ? '공개 Pages에서는 공개 Proxy URL을 입력하세요.'
+      : '로컬 Hermes 연결 대기 중'
+  ));
   const endRef = useRef(null);
 
   const activeSession = useMemo(() => {
@@ -382,12 +397,12 @@ export default function App() {
   useEffect(() => {
     if (!proxyUrl) return;
     let cancelled = false;
-    const pageIsPublic = typeof window !== 'undefined' && !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-    const proxyLooksPrivate = /^(https?:\/\/)?(127\.0\.0\.1|localhost|[^/]+\.ts\.net)(:\d+)?(\/|$)/i.test(proxyUrl);
+    const pageIsPublic = isPublicBrowser();
+    const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
 
-    if (pageIsPublic && proxyLooksPrivate) {
+    if (pageIsPublic && storedSource !== 'manual') {
       setStatus({ proxy: 'unknown', upstream: 'unknown' });
-      setSystemNote('공개 Pages에서는 로컬/Tailscale 프록시를 직접 호출할 수 없습니다. 로컬 모드에서 사용하거나 공개 릴레이를 연결하세요.');
+      setSystemNote('공개 Pages에서는 먼저 공개 Proxy URL을 입력하세요.');
       return () => {
         cancelled = true;
       };
@@ -410,7 +425,7 @@ export default function App() {
       } catch {
         if (cancelled) return;
         setStatus({ proxy: 'down', upstream: 'down' });
-        setSystemNote('프록시를 찾을 수 없습니다');
+        setSystemNote(pageIsPublic ? '공개 Proxy URL 연결 실패' : '프록시를 찾을 수 없습니다');
       }
     }
 
@@ -968,25 +983,40 @@ export default function App() {
               <section className="railCard railCardCompact">
                 <div className="railHeader">
                   <div>
-                    <div className="sectionLabel">연결 설정</div>
-                    <h3>프록시 / 서명</h3>
-                  </div>
+                <div className="sectionLabel">연결 설정</div>
+                <h3>프록시 / 서명</h3>
+              </div>
+            </div>
+            <label className="fieldLabel">
+              Proxy URL
+              <input
+                value={proxyUrl}
+                onChange={(event) => {
+                  localStorage.setItem(STORAGE_KEYS.proxyUrlSource, 'manual');
+                  setProxyUrl(normalizeBaseUrl(event.target.value));
+                }}
+                placeholder={isPublicBrowser() ? 'https://<public proxy url>' : 'http://127.0.0.1:8787'}
+              />
+            </label>
+            <label className="fieldLabel">
+              API Token
+              <input value={apiToken} onChange={(event) => setApiToken(event.target.value)} placeholder="선택" />
+            </label>
+            <label className="fieldLabel">
+              API Secret
+              <input value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} placeholder="선택" />
+            </label>
+            {isPublicBrowser() && (
+              <div className="actionCard">
+                <div className="actionTitle">공개 Pages 모드</div>
+                <div className="actionDesc">
+                  자동 상태 조회는 끄고, 여기에 입력한 공개 Proxy URL만 사용합니다.
                 </div>
-                <label className="fieldLabel">
-                  Proxy URL
-                  <input value={proxyUrl} onChange={(event) => setProxyUrl(normalizeBaseUrl(event.target.value))} placeholder="http://127.0.0.1:8787" />
-                </label>
-                <label className="fieldLabel">
-                  API Token
-                  <input value={apiToken} onChange={(event) => setApiToken(event.target.value)} placeholder="선택" />
-                </label>
-                <label className="fieldLabel">
-                  API Secret
-                  <input value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} placeholder="선택" />
-                </label>
-              </section>
-            </aside>
-          )}
+              </div>
+            )}
+          </section>
+        </aside>
+      )}
         </section>
       </main>
     </div>
