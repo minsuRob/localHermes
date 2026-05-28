@@ -1,0 +1,22 @@
+{
+  "filesystem": {
+    "port": 7011,
+    "stdio": "npx -y @modelcontextprotocol/server-filesystem /Users/robertlee/Workspace/Personal"
+  },
+  "fetch": {
+    "port": 7012,
+    "stdio": "npx mcp-fetch-server"
+  },
+  "macos-automator": {
+    "port": 7013,
+    "stdio": "npx -y @steipete/macos-automator-mcp@latest"
+  },
+  "chrome-devtools": {
+    "port": 7014,
+    "stdio": "npx -y chrome-devtools-mcp@latest --browserUrl=http://127.0.0.1:9222"
+  },
+  "shell": {
+    "port": 7015,
+    "stdio": "npx -y @mako10k/mcp-shell-server"
+  }
+}

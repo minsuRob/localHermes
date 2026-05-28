@@ -1,0 +1,11 @@
+{
+  "name": "macos-automator",
+  "command": "npx",
+  "args": ["-y", "@steipete/macos-automator-mcp@latest"],
+  "env": {
+    "LOG_LEVEL": "INFO"
+  },
+  "cwd": "/Users/robertlee/Workspace/Personal/localHermes",
+  "timeout": 60000,
+  "disabled": false
+}

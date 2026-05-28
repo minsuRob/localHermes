@@ -7,9 +7,37 @@
 - `servers/`: MCP 서버 원본 정의 파일
 - `enabled/`: Hermes가 로드할 활성 MCP 목록
 - `templates/`: 새 MCP를 만들 때 복사할 템플릿
-- 샘플 서버:
-  - `fetch.json`: 웹 콘텐츠 수집용
-  - `sqlite.json`: 로컬 SQLite 조회용
+
+## 활성 MCP 목록 (현재)
+
+| 파일 | 패키지 | 역할 |
+|------|--------|------|
+| `filesystem.json` | `@modelcontextprotocol/server-filesystem` | Personal 디렉토리 파일 접근 |
+| `fetch.json` | `mcp-fetch-server` | URL→텍스트 (JS 렌더링 없음) |
+| `macos-automator.json` | `@steipete/macos-automator-mcp` | Chrome/앱 AppleScript 제어 |
+| `chrome-devtools.json` | `chrome-devtools-mcp` | 실제 Chrome CDP 탭 자동화 |
+| `shell.json` | `@mako10k/mcp-shell-server` | 터미널 명령 실행 (고위험) |
+
+비활성 샘플: `sqlite.json`, `github.json` (`disabled: true`)
+
+## Chrome 사용 흐름
+
+1. **Chrome 앱 열기/종료/URL 열기** → `macos-automator` (CDP 불필요)
+2. **탭 안 DOM 조작** → `./scripts/start-chrome-debug.sh` 실행 후 `chrome-devtools` 사용
+3. **웹 페이지 텍스트만 필요** → `fetch` (브라우저 불필요)
+
+## macOS 권한 (TCC)
+
+Hermes가 MCP를 spawn할 때 사용하는 프로세스(Hermes 앱, Node, npx)에 권한을 부여해야 합니다.
+
+| 권한 | MCP | 설정 |
+|------|-----|------|
+| Automation | macos-automator | 개인정보 보호 → Automation |
+| Accessibility | macos-automator, chrome-devtools | 접근성 |
+| Screen Recording | chrome-devtools | 화면 녹화 |
+| Files and Folders | filesystem | 파일 및 폴더 |
+
+권한 변경 후 Hermes를 완전히 재시작하세요.
 
 ## 설정 파일 스키마 (Config Contract)
 
@@ -32,15 +60,10 @@
    - 방법 B: 원본 JSON을 복사
 4. Hermes 재시작 후 MCP 인식 확인
 
-샘플 서버는 아래처럼 사용할 수 있습니다.
-
-- `fetch.json`: `npx mcp-fetch-server`
-- `sqlite.json`: `npx mcp-sqlite-server`
-
 예시(심볼릭 링크 방식):
 
 ```bash
-ln -s ../servers/filesystem.json enabled/filesystem.json
+ln -s ../servers/macos-automator.json enabled/macos-automator.json
 ```
 
 ## 비활성화 절차
@@ -53,6 +76,8 @@ ln -s ../servers/filesystem.json enabled/filesystem.json
 - 토큰/시크릿은 JSON에 하드코딩하지 않습니다.
 - `env`에는 `$GITHUB_TOKEN` 같은 환경변수 참조만 기록합니다.
 - 민감값은 `.env` 또는 OS Keychain에서 주입합니다.
+- `shell` MCP는 호스트 전체 RCE에 해당합니다. 로컬 전용으로 사용하세요.
+- npx `-y`는 패키지명 오타/탈취 위험이 있으므로, 운영 시 버전 pin을 검토하세요.
 
 ## 검증 체크리스트
 
@@ -60,4 +85,6 @@ ln -s ../servers/filesystem.json enabled/filesystem.json
 - [ ] `args`와 `cwd`가 올바른 경로 사용
 - [ ] `env`의 변수명이 실제로 설정됨
 - [ ] `enabled/` 등록 후 Hermes 재시작 시 MCP가 로드됨
+- [ ] Chrome 탭 자동화 시 `scripts/start-chrome-debug.sh` 실행 후 CDP(9222) 응답 확인
+- [ ] macOS TCC 권한 부여 완료
 - [ ] 비활성화 시 로딩에서 제외됨

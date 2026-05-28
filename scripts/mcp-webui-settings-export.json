@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "timestamp": 0,
+  "config": {
+    "mcpServers": "[{\"id\":\"localHermes-filesystem\",\"name\":\"filesystem\",\"enabled\":true,\"url\":\"http://127.0.0.1:7011/mcp\",\"useProxy\":false},{\"id\":\"localHermes-fetch\",\"name\":\"fetch\",\"enabled\":true,\"url\":\"http://127.0.0.1:7012/mcp\",\"useProxy\":false},{\"id\":\"localHermes-macos-automator\",\"name\":\"macos-automator\",\"enabled\":true,\"url\":\"http://127.0.0.1:7013/mcp\",\"useProxy\":false},{\"id\":\"localHermes-chrome-devtools\",\"name\":\"chrome-devtools\",\"enabled\":true,\"url\":\"http://127.0.0.1:7014/mcp\",\"useProxy\":false},{\"id\":\"localHermes-shell\",\"name\":\"shell\",\"enabled\":true,\"url\":\"http://127.0.0.1:7015/mcp\",\"useProxy\":false}]"
+  },
+  "userOverrides": []
+}

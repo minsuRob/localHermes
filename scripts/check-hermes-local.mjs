@@ -89,32 +89,75 @@ async function checkMcpDirectory(directoryName) {
   pass(`MCP ${directoryName} JSON 검증 완료 (${jsonFiles.length}개)`);
 }
 
-async function checkEnabledLink() {
-  const enabledPath = path.join(rootDir, 'mcp', 'enabled', 'filesystem.json');
-  const expectedTarget = path.join(rootDir, 'mcp', 'servers', 'filesystem.json');
+async function checkEnabledEntry(entryName) {
+  const enabledPath = path.join(rootDir, 'mcp', 'enabled', entryName);
+  const expectedTarget = path.join(rootDir, 'mcp', 'servers', entryName);
 
   if (!(await exists(enabledPath))) {
-    throw new Error('mcp/enabled/filesystem.json 이 없습니다.');
+    throw new Error(`mcp/enabled/${entryName} 이 없습니다.`);
+  }
+
+  if (!(await exists(expectedTarget))) {
+    throw new Error(`mcp/servers/${entryName} 이 없습니다.`);
   }
 
   const enabledStat = await lstat(enabledPath);
   if (enabledStat.isSymbolicLink()) {
     const target = await readlink(enabledPath);
     const resolvedTarget = path.resolve(path.dirname(enabledPath), target);
-    info(`filesystem 활성화 링크 확인됨: ${target}`);
+    info(`${entryName} 활성화 링크 확인됨: ${target}`);
     if (resolvedTarget !== expectedTarget) {
-      throw new Error(`mcp/enabled/filesystem.json 링크 대상이 예상과 다릅니다: ${resolvedTarget}`);
+      throw new Error(`mcp/enabled/${entryName} 링크 대상이 예상과 다릅니다: ${resolvedTarget}`);
     }
-    pass('활성 MCP 링크 확인');
+    pass(`활성 MCP 링크 확인: ${entryName}`);
     return;
   }
 
   const enabledConfig = await loadJson(enabledPath);
   const expectedConfig = await loadJson(expectedTarget);
   if (JSON.stringify(enabledConfig) !== JSON.stringify(expectedConfig)) {
-    throw new Error('mcp/enabled/filesystem.json 이 servers 버전과 일치하지 않습니다.');
+    throw new Error(`mcp/enabled/${entryName} 이 servers 버전과 일치하지 않습니다.`);
   }
-  pass('활성 MCP 복사본 확인');
+  pass(`활성 MCP 복사본 확인: ${entryName}`);
+}
+
+async function checkEnabledLinks() {
+  const enabledDir = path.join(rootDir, 'mcp', 'enabled');
+  const entries = await readdir(enabledDir, { withFileTypes: true });
+  const jsonFiles = entries
+    .filter((entry) => entry.isFile() || entry.isSymbolicLink())
+    .filter((entry) => entry.name.endsWith('.json'))
+    .map((entry) => entry.name)
+    .sort();
+
+  if (jsonFiles.length === 0) {
+    throw new Error('mcp/enabled/ 에 활성 MCP가 없습니다.');
+  }
+
+  for (const entryName of jsonFiles) {
+    await checkEnabledEntry(entryName);
+  }
+
+  pass(`활성 MCP 전체 검증 완료 (${jsonFiles.length}개)`);
+}
+
+async function checkChromeCdp() {
+  const cdpUrl = process.env.CHROME_DEBUG_URL || 'http://127.0.0.1:9222/json/version';
+  const response = await fetch(cdpUrl).catch(() => null);
+  if (!response || !response.ok) {
+    info('Chrome CDP 미응답 (9222). 탭 자동화가 필요할 때 scripts/start-chrome-debug.sh 실행');
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = await response.json();
+  } catch {
+    info('Chrome CDP 응답 파싱 실패');
+    return;
+  }
+
+  pass(`Chrome CDP 응답: ${parsed.Browser || 'ready'}`);
 }
 
 async function checkHermesApi() {
@@ -181,7 +224,8 @@ async function main() {
   try {
     await checkMcpDirectory('servers');
     await checkMcpDirectory('templates');
-    await checkEnabledLink();
+    await checkEnabledLinks();
+    await checkChromeCdp();
     await checkHermesApi();
   } catch (error) {
     fail(error.message || String(error));
