@@ -245,7 +245,7 @@ export default function App() {
     const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
     const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
     if (isPublicBrowser()) {
-      return storedSource === 'manual' && storedUrl && !isPrivateProxyUrl(storedUrl) ? storedUrl : '';
+      return storedSource === 'manual' && storedUrl ? storedUrl : '';
     }
     return normalizeBaseUrl(storedUrl || configUrl || 'http://127.0.0.1:8787');
   });
@@ -254,9 +254,7 @@ export default function App() {
     if (isPublicBrowser()) {
       const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
       const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
-      return storedSource === 'manual' && storedUrl && !isPrivateProxyUrl(storedUrl)
-        ? normalizeBaseUrl(storedUrl)
-        : '';
+      return storedSource === 'manual' && storedUrl ? normalizeBaseUrl(storedUrl) : '';
     }
     const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
     return normalizeBaseUrl(storedUrl || configUrl || 'http://127.0.0.1:8787');
@@ -369,11 +367,6 @@ export default function App() {
       return;
     }
 
-    if (isPublicBrowser() && isPrivateProxyUrl(next)) {
-      setActionStatus('공개 Pages에서는 공개 Proxy URL만 적용할 수 있습니다');
-      return;
-    }
-
     try {
       new URL(next);
     } catch {
@@ -447,7 +440,7 @@ export default function App() {
     if (isPublicBrowser()) {
       const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
       const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
-      if (storedSource !== 'manual' || !storedUrl || isPrivateProxyUrl(storedUrl)) {
+      if (storedSource !== 'manual' || !storedUrl) {
         localStorage.removeItem(STORAGE_KEYS.proxyUrl);
         localStorage.removeItem(STORAGE_KEYS.proxyUrlSource);
         setProxyDraft('');
