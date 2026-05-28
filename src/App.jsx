@@ -82,6 +82,10 @@ function isPublicBrowser() {
   return !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 }
 
+function isPrivateProxyUrl(value) {
+  return /^(https?:\/\/)?(127\.0\.0\.1|localhost|[^/]+\.ts\.net)(:\d+)?(\/|$)/i.test(String(value || '').trim());
+}
+
 function looksLikeComputerUsePrompt(text) {
   const lower = String(text || '').toLowerCase();
   const hasAppIntent =
@@ -225,12 +229,11 @@ export default function App() {
   });
   const [draft, setDraft] = useState('');
   const [proxyUrl, setProxyUrl] = useState(() => {
-    const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
-    const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
     const configUrl = import.meta.env.VITE_PROXY_URL || window.__OPENHERMES_CONFIG__?.proxyUrl || '';
     if (isPublicBrowser()) {
-      return storedSource === 'manual' ? normalizeBaseUrl(storedUrl) : '';
+      return '';
     }
+    const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
     return normalizeBaseUrl(storedUrl || configUrl || 'http://127.0.0.1:8787');
   });
   const [apiToken, setApiToken] = useState(() => localStorage.getItem(STORAGE_KEYS.apiToken) || '');
@@ -383,6 +386,13 @@ export default function App() {
   }, [activeSessionId]);
 
   useEffect(() => {
+    if (isPublicBrowser()) {
+      localStorage.removeItem(STORAGE_KEYS.proxyUrl);
+      localStorage.removeItem(STORAGE_KEYS.proxyUrlSource);
+    }
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.proxyUrl, proxyUrl);
   }, [proxyUrl]);
   
@@ -399,8 +409,14 @@ export default function App() {
     let cancelled = false;
     const pageIsPublic = isPublicBrowser();
     const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
+    const proxyIsPrivate = isPrivateProxyUrl(proxyUrl);
 
-    if (pageIsPublic && storedSource !== 'manual') {
+    if (pageIsPublic && (storedSource !== 'manual' || proxyIsPrivate)) {
+      if (proxyIsPrivate) {
+        setProxyUrl('');
+        localStorage.removeItem(STORAGE_KEYS.proxyUrl);
+        localStorage.removeItem(STORAGE_KEYS.proxyUrlSource);
+      }
       setStatus({ proxy: 'unknown', upstream: 'unknown' });
       setSystemNote('공개 Pages에서는 먼저 공개 Proxy URL을 입력하세요.');
       return () => {
