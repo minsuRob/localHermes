@@ -986,6 +986,8 @@ export default function App() {
                             {entry.strategyUsed ? `strategy=${entry.strategyUsed}` : ''}
                             {entry.fallbackUsed ? ` · fallback=${entry.fallbackUsed}` : ''}
                             {Number.isFinite(entry.elapsedMs) ? ` · ${entry.elapsedMs}ms` : ''}
+                            {entry.result?.observedText ? ` · ocr="${String(entry.result.observedText).slice(0, 80)}"` : ''}
+                            {entry.result?.screenshot?.path ? ` · shot=${entry.result.screenshot.path.split('/').pop()}` : ''}
                           </div>
                         </div>
                       ))}

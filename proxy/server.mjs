@@ -244,6 +244,49 @@ function containsAny(text, patterns = []) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+function getPromptSignals(promptText = '', contextText = '') {
+  const combined = `${String(promptText || '').trim()}\n${String(contextText || '').trim()}`.trim();
+  const lower = combined.toLowerCase();
+  return {
+    wantsObservation: containsAny(lower, [
+      /화면/i,
+      /screen/i,
+      /screenshot/i,
+      /image/i,
+      /이미지/i,
+      /캡처/i,
+      /ocr/i,
+      /보이는/i,
+      /보여/i,
+      /확인/i,
+      /검증/i,
+      /분석/i,
+      /analysis/i,
+      /what do you see/i,
+      /현재 화면/i,
+      /지금 화면/i,
+    ]),
+    wantsVisibleVerification: containsAny(lower, [
+      /화면/i,
+      /screen/i,
+      /screenshot/i,
+      /image/i,
+      /이미지/i,
+      /캡처/i,
+      /ocr/i,
+      /보이는/i,
+      /보여/i,
+      /확인/i,
+      /검증/i,
+      /결과/i,
+      /result/i,
+      /됐는지/i,
+      /됐는가/i,
+      /visible/i,
+    ]),
+  };
+}
+
 function inferPreferredBrowserUrl(prompt, lower) {
   const urlMatch = prompt.match(/https?:\/\/[^\s]+/i);
   if (urlMatch?.[0]) return urlMatch[0];
@@ -263,6 +306,7 @@ function inferControlActionsFromPrompt(promptText = '', contextText = '') {
   const context = String(contextText || '').trim();
   const combined = `${prompt}\n${context}`.trim();
   const lower = combined.toLowerCase();
+  const promptSignals = getPromptSignals(prompt, context);
   const actions = [];
 
   const wantsChrome = containsAny(lower, [
@@ -355,7 +399,7 @@ function inferControlActionsFromPrompt(promptText = '', contextText = '') {
       });
       actions.push({
         action: 'verify',
-        type: 'terminalOutputVisible',
+        type: promptSignals.wantsVisibleVerification ? 'terminalOutputVisible' : 'shell',
         command,
       });
     }
@@ -572,10 +616,19 @@ async function buildControlPlan(promptText, contextText = '') {
     return heuristicPlan;
   }
 
+  const promptSignals = getPromptSignals(promptText, contextText);
+  const probe = promptSignals.wantsObservation || promptSignals.wantsVisibleVerification
+    ? await probeAutomation().catch(() => null)
+    : null;
+  const screenText = String(probe?.screenRecording?.text || '').trim();
+
   const systemPrompt = [
     'You are OpenHermes computer-use planner.',
     'Convert the user request into a compact JSON object only.',
     'No markdown, no prose, no code fences.',
+    'Use the current screen observations to decide the next action instead of stopping at app launch.',
+    'If the request asks to inspect a screen, image, terminal output, or whether something worked, include screenshot/OCR-based verification.',
+    'For Zed or terminal tasks, do not stop at launch: focus the app, open the terminal/pane if needed, run the command, and verify the output is visible.',
     'Schema: {"summary":"...", "actions":[{"action":"launch|focus|openUrl|waitFor|clickUi|clickText|clickCoordinates|type|press|shortcut|runShell|verify|clickMenuItem|openSystemPane|probe|activateWindow", "app":"...", "url":"...", "text":"...", "pane":"...", "command":"...", "inFocusedTerminal":true, "timeoutMs":1000, "sleepMs":1000, "target":{"text":"...","role":"...","selector":"...","coords":{"x":0,"y":0}}, "shortcut":{"key":"...","modifiers":["command","shift"]}, "menuPath":{"menu":"...","item":"...","subItem":"..."}, "selectorOrCoords":{"x":0,"y":0}, "condition":{"type":"frontmostApp|windowTitleContains|screenTextContains|appRunning|shell","app":"...","text":"...","command":"..."}}]}\nUse verify type "terminalOutputVisible" when the command output must be confirmed on screen.',
     'Use Chrome for web requests when a browser is requested.',
     'Use clickText or clickUi for button or link clicks in browser and app UIs.',
@@ -585,15 +638,27 @@ async function buildControlPlan(promptText, contextText = '') {
     'If the request cannot be safely executed, return {"summary":"...", "actions":[{"action":"probe"}]}.',
   ].join(' ');
 
+  const heuristicSummary = Array.isArray(heuristicPlan.actions)
+    ? heuristicPlan.actions.map((action) => describePlannerAction(action)).join(' -> ')
+    : '';
+  const observations = [
+    `Request: ${promptText}`,
+    contextText ? `Context: ${contextText}` : '',
+    heuristicSummary ? `Heuristic plan: ${heuristicSummary}` : '',
+    probe?.frontmost?.ok ? `Frontmost: ${probe.frontmost.stdout || probe.frontmost.app || ''}` : '',
+    probe?.screenRecording?.path ? `Screenshot: ${probe.screenRecording.path}` : '',
+    screenText ? `OCR: ${screenText.slice(0, 800)}` : '',
+  ].filter(Boolean).join('\n');
+
   const response = await forwardChat({
     stream: false,
     temperature: 0,
-    max_tokens: 512,
+    max_tokens: 256,
     messages: [
       { role: 'system', content: systemPrompt },
       {
         role: 'user',
-        content: `Request: ${promptText}${contextText ? `\nContext: ${contextText}` : ''}`,
+        content: observations,
       },
     ],
   });
@@ -618,7 +683,45 @@ async function buildControlPlan(promptText, contextText = '') {
     parsed.summary = String(promptText || '').trim() || 'computer use task';
   }
 
-  return parsed;
+  const scoreAction = (action = {}) => {
+    const name = String(action.action || '').toLowerCase();
+    return ({
+      launch: 1,
+      focus: 1,
+      openurl: 2,
+      waitfor: 1,
+      clickui: 3,
+      clicktext: 3,
+      clickcoordinates: 2,
+      type: 3,
+      shortcut: 3,
+      runshell: 4,
+      verify: 4,
+      clickmenuitem: 3,
+      opensystempane: 2,
+      probe: 2,
+      activatewindow: 1,
+    }[name] || 1);
+  };
+
+  const scorePlan = (plan = {}) => Array.isArray(plan.actions)
+    ? plan.actions.reduce((total, action) => total + scoreAction(action), 0)
+    : 0;
+  const selectedPlan = scorePlan(parsed) >= scorePlan(heuristicPlan) ? parsed : heuristicPlan;
+
+  if (promptSignals.wantsVisibleVerification && Array.isArray(selectedPlan.actions)) {
+    for (const action of selectedPlan.actions) {
+      if (String(action.action || '').toLowerCase() === 'verify') {
+        const verifyType = String(action.type || action.verify || '').toLowerCase();
+        if (verifyType === 'shell' && String(action.command || '').trim()) {
+          action.type = 'terminalOutputVisible';
+        }
+      }
+    }
+  }
+
+  selectedPlan.observations = observations;
+  return selectedPlan;
 }
 
 async function executeControlPlan(plan, options = {}) {

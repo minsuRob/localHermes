@@ -280,6 +280,12 @@ async function checkProxy() {
       throw new Error(`${scenario.name}: plan actions missing`);
     }
     expectActionSequence(scenario.name, control.plan.actions, scenario.expected);
+    if (scenario.name.includes('Zed')) {
+      const verifyAction = control.plan.actions.find((action) => action.action === 'verify');
+      if (!verifyAction || verifyAction.type !== 'terminalOutputVisible') {
+        throw new Error(`${scenario.name}: expected terminalOutputVisible verification, got ${verifyAction?.type || '(missing)'}`);
+      }
+    }
     if (control.finalStatus && control.finalStatus !== 'preview') {
       info(`${scenario.name}: finalStatus=${control.finalStatus}`);
     }
