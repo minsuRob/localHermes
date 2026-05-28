@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -14,6 +15,13 @@ import {
   getAuditLogPath,
   readRecentAuditRecords,
 } from '../lib/openhermes-audit.mjs';
+import {
+  createQueuedRequest,
+  getQueuedRequest,
+  getRequestStorePath,
+  listQueuedRequests,
+  updateQueuedRequest,
+} from '../lib/openhermes-requests.mjs';
 import {
   executeAutomationAction,
   inspectPermissions,
@@ -41,9 +49,15 @@ const modelId = getArg('--model', process.env.OPENHERMES_MODEL_ID || process.env
 const rateLimitPerMinute = Number(getArg('--rate-limit', process.env.OPENHERMES_RATE_LIMIT_PER_MINUTE || '180'));
 const allowedOrigin = getArg('--allowed-origin', process.env.OPENHERMES_ALLOWED_ORIGIN || '*');
 const exposeMode = hasFlag('--serve') ? 'tailnet' : hasFlag('--funnel') ? 'public' : '';
+const approvalMode = getArg('--approval-mode', process.env.OPENHERMES_APPROVAL_MODE || 'required');
+const localFastPathEnabled = String(process.env.OPENHERMES_LOCAL_FASTPATH || 'true').toLowerCase() !== 'false';
 const apiToken = getArg('--token', process.env.OPENHERMES_API_TOKEN || '');
 const apiSecret = getArg('--secret', process.env.OPENHERMES_API_SECRET || '');
 const auditLogPath = getAuditLogPath(rootDir, getArg('--audit-log', process.env.OPENHERMES_AUDIT_LOG || ''));
+const requestStorePath = getRequestStorePath(rootDir, getArg('--request-store', process.env.OPENHERMES_REQUEST_STORE || ''));
+const slackWebhookSecret = process.env.OPENHERMES_SLACK_WEBHOOK_SECRET || '';
+const discordWebhookSecret = process.env.OPENHERMES_DISCORD_WEBHOOK_SECRET || '';
+const githubWebhookSecret = process.env.OPENHERMES_GITHUB_WEBHOOK_SECRET || '';
 
 const requestCounters = new Map();
 
@@ -353,6 +367,253 @@ function readDiscordText(body) {
   return '';
 }
 
+function readGitHubText(body) {
+  const candidates = [
+    body.comment?.body,
+    body.issue?.title,
+    body.issue?.body,
+    body.pull_request?.title,
+    body.pull_request?.body,
+    body.workflow_job?.name,
+    body.repository?.full_name,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return '';
+}
+
+function isApprovalRequired() {
+  return !['off', 'disabled', 'direct', 'false'].includes(String(approvalMode || 'required').toLowerCase());
+}
+
+function isLocalFastPath(auth) {
+  return localFastPathEnabled && Boolean(auth?.loopback);
+}
+
+async function loadRequestRecord(id) {
+  return getQueuedRequest(requestStorePath, id);
+}
+
+async function persistRequestRecord(updaterOrPatch, id) {
+  return updateQueuedRequest(requestStorePath, id, updaterOrPatch);
+}
+
+function makeQueueResponse(requestRecord, plan, extra = {}) {
+  return {
+    ok: true,
+    queued: true,
+    executed: false,
+    summary: plan?.summary || requestRecord?.summary || 'pending approval',
+    plan,
+    request: requestRecord,
+    ...extra,
+  };
+}
+
+async function queueControlRequest({
+  source,
+  task,
+  body = {},
+  auth = null,
+  channel = '',
+  sourceLabel = '',
+  reply = '',
+}) {
+  const plan = await buildControlPlan(task, body.context || '');
+  const requestRecord = await createQueuedRequest(requestStorePath, {
+    kind: 'control',
+    source,
+    sourceLabel: sourceLabel || source,
+    channel,
+    summary: plan.summary,
+    task,
+    plan,
+    payload: body,
+    reply,
+    approvalRequired: true,
+    executionMode: 'queued',
+    auth: auth ? { required: auth.required, mode: auth.mode, loopback: auth.loopback, remoteAddress: auth.remoteAddress } : null,
+  });
+  return { plan, requestRecord };
+}
+
+function buildApprovalMeta(auth = null, body = {}) {
+  const meta = {
+    approvedAt: new Date().toISOString(),
+    approvedReason: String(body.reason || body.note || '').trim() || 'approved via api',
+  };
+  if (auth) {
+    meta.approvedBy = {
+      required: Boolean(auth.required),
+      mode: auth.mode,
+      loopback: Boolean(auth.loopback),
+      remoteAddress: auth.remoteAddress || '',
+    };
+  }
+  return meta;
+}
+
+function summarizeExecutionResults(executionResults = []) {
+  if (!Array.isArray(executionResults) || !executionResults.length) {
+    return 'no actions executed';
+  }
+  return executionResults
+    .map(({ action, result }) => {
+      const label = action?.action || action?.app || action?.pane || 'action';
+      const ok = result?.ok === false ? 'failed' : 'ok';
+      return `${label}:${ok}`;
+    })
+    .join(', ');
+}
+
+async function approveQueuedRequest(requestId, { request = null, auth = null, body = {} } = {}) {
+  const current = await loadRequestRecord(requestId);
+  if (!current) {
+    return null;
+  }
+
+  const approvalMeta = buildApprovalMeta(auth, body);
+  const approved = await persistRequestRecord((record) => ({
+    ...record,
+    status: 'approved',
+    approvalRequired: true,
+    ...approvalMeta,
+  }), requestId);
+
+  const plan = approved.plan || await buildControlPlan(approved.task || approved.summary || '', approved.payload?.context || '');
+  const executionResults = await executeControlPlan(plan);
+  const executed = await persistRequestRecord((record) => ({
+    ...record,
+    status: 'executed',
+    approvalRequired: true,
+    executedAt: new Date().toISOString(),
+    plan,
+    executionResults,
+    executionSummary: summarizeExecutionResults(executionResults),
+    executionError: '',
+  }), requestId);
+
+  if (executed.reply) {
+    const replyText = [
+      `요청이 승인되어 실행되었습니다. requestId=${executed.id}`,
+      `summary=${executed.summary || plan.summary || 'control task'}`,
+      `results=${executed.executionSummary || summarizeExecutionResults(executionResults)}`,
+    ].join('\n');
+    await sendWebhookReply(executed.reply, replyText);
+  }
+
+  await audit('requests.approved', request || { method: 'POST', url: `/api/requests/${requestId}/approve`, headers: {} }, {
+    requestId,
+    plan,
+    executionResults,
+    request: executed,
+  });
+
+  return { requestRecord: executed, plan, executionResults };
+}
+
+async function rejectQueuedRequest(requestId, { request = null, auth = null, body = {} } = {}) {
+  const current = await loadRequestRecord(requestId);
+  if (!current) {
+    return null;
+  }
+
+  const rejected = await persistRequestRecord((record) => ({
+    ...record,
+    status: 'rejected',
+    rejectedAt: new Date().toISOString(),
+    rejectionReason: String(body.reason || body.note || '').trim() || 'rejected via api',
+    rejectedBy: auth ? {
+      required: Boolean(auth.required),
+      mode: auth.mode,
+      loopback: Boolean(auth.loopback),
+      remoteAddress: auth.remoteAddress || '',
+    } : null,
+  }), requestId);
+
+  await audit('requests.rejected', request || { method: 'POST', url: `/api/requests/${requestId}/reject`, headers: {} }, {
+    requestId,
+    request: rejected,
+  });
+
+  return rejected;
+}
+
+function normalizeWebhookText(body = {}) {
+  if (typeof body.text === 'string' && body.text.trim()) return body.text.trim();
+  if (typeof body.command === 'string' && body.command.trim()) return body.command.trim();
+  if (typeof body.content === 'string' && body.content.trim()) return body.content.trim();
+  if (typeof body.message === 'string' && body.message.trim()) return body.message.trim();
+  if (typeof body.challenge === 'string' && body.challenge.trim()) return body.challenge.trim();
+  if (typeof body.event?.text === 'string' && body.event.text.trim()) return body.event.text.trim();
+  if (typeof body.comment?.body === 'string' && body.comment.body.trim()) return body.comment.body.trim();
+  if (typeof body.issue?.title === 'string' && body.issue.title.trim()) return body.issue.title.trim();
+  if (typeof body.issue?.body === 'string' && body.issue.body.trim()) return body.issue.body.trim();
+  return '';
+}
+
+function looksLikeRemoteControlRequest(text) {
+  return /(?:열어|켜|실행|launch|open|focus|visit|방문|시작|chrome|크롬|cursor|codex|zed|github|설정|권한|permission|privacy|daum|naver|google|youtube|url|https?:\/\/|www\.|[a-z0-9-]+\.(?:com|net|org|io|co\.kr|kr|dev))/i.test(String(text || ''));
+}
+
+function hmacSha256(secret, text) {
+  return crypto.createHmac('sha256', secret).update(text).digest('hex');
+}
+
+function verifyGithubWebhook(request, rawBody) {
+  if (!process.env.OPENHERMES_GITHUB_WEBHOOK_SECRET) {
+    return { ok: true, required: false };
+  }
+  const provided = String(request.headers['x-hub-signature-256'] || request.headers['x-hub-signature'] || '').trim();
+  if (!provided) {
+    return { ok: false, required: true, reason: 'missing_github_signature' };
+  }
+  const digestShort = hmacSha256(process.env.OPENHERMES_GITHUB_WEBHOOK_SECRET, rawBody);
+  const candidate = provided.startsWith('sha256=') ? provided.slice('sha256='.length) : provided;
+  const expected = Buffer.from(digestShort, 'hex');
+  const actual = Buffer.from(candidate, 'hex');
+  if (expected.length === 0 || actual.length === 0) {
+    return { ok: false, required: true, reason: 'invalid_github_signature' };
+  }
+  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+    return { ok: false, required: true, reason: 'invalid_github_signature' };
+  }
+  return { ok: true, required: true };
+}
+
+function verifySharedWebhookSecret(request, body, envSecret, headerName) {
+  if (!envSecret) {
+    return { ok: true, required: false };
+  }
+  const provided = String(request.headers[headerName] || body.secret || body.token || '').trim();
+  if (!provided) {
+    return { ok: false, required: true, reason: 'missing_webhook_secret' };
+  }
+  if (provided !== envSecret) {
+    return { ok: false, required: true, reason: 'invalid_webhook_secret' };
+  }
+  return { ok: true, required: true };
+}
+
+function isGitHubQueueRequest(body) {
+  const action = String(body.action || '').toLowerCase();
+  const text = normalizeWebhookText(body);
+  return Boolean(text && ['created', 'edited', 'opened', 'reopened', 'submitted'].includes(action)) || Boolean(text && looksLikeRemoteControlRequest(text));
+}
+
+async function listRequestsFromQuery(url) {
+  const limit = Number(url.searchParams.get('limit') || '50');
+  const status = String(url.searchParams.get('status') || '').trim();
+  const items = await listQueuedRequests(requestStorePath, {
+    status: status || '',
+    limit: Number.isFinite(limit) ? limit : 50,
+  });
+  return items;
+}
+
 const server = http.createServer(async (request, response) => {
   if (rateLimited(request)) {
     sendJson(response, 429, { ok: false, error: 'rate_limited' });
@@ -377,7 +638,8 @@ const server = http.createServer(async (request, response) => {
     url.pathname.startsWith('/api/control') ||
     url.pathname.startsWith('/api/automation') ||
     url.pathname.startsWith('/api/permissions') ||
-    url.pathname.startsWith('/api/audit');
+    url.pathname.startsWith('/api/audit') ||
+    url.pathname.startsWith('/api/requests');
 
   if (needsProtectedAuth && request.method !== 'OPTIONS') {
     const auth = verifyRequestAuth(request, {
@@ -440,6 +702,195 @@ const server = http.createServer(async (request, response) => {
       });
     } catch (error) {
       await audit('permissions.status.error', request, { error: error.message || String(error) });
+      sendJson(response, 500, { ok: false, error: error.message || String(error) }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    }
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/requests') {
+    try {
+      const requests = await listRequestsFromQuery(url);
+      await audit('requests.list', request, {
+        count: requests.length,
+        status: url.searchParams.get('status') || '',
+      });
+      sendJson(response, 200, {
+        ok: true,
+        requests,
+        storePath: requestStorePath,
+      }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    } catch (error) {
+      await audit('requests.list.error', request, { error: error.message || String(error) });
+      sendJson(response, 500, { ok: false, error: error.message || String(error) }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    }
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname.startsWith('/api/requests/')) {
+    try {
+      const id = url.pathname.split('/').filter(Boolean)[2] || '';
+      const requestRecord = await loadRequestRecord(id);
+      if (!requestRecord) {
+        sendJson(response, 404, { ok: false, error: 'request_not_found' }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+      sendJson(response, 200, { ok: true, request: requestRecord }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    } catch (error) {
+      await audit('requests.get.error', request, { error: error.message || String(error) });
+      sendJson(response, 500, { ok: false, error: error.message || String(error) }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    }
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/requests') {
+    try {
+      const { body, auth } = await readAuthAndBody(request, url);
+      const task = String(body.task || body.prompt || body.message || body.text || '').trim();
+      if (!task) {
+        sendJson(response, 400, { ok: false, error: 'missing_task' }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+
+      const source = String(body.source || 'api.requests').trim() || 'api.requests';
+      const channel = String(body.channel || 'api').trim() || 'api';
+      const sourceLabel = String(body.sourceLabel || source).trim() || source;
+      const { plan, requestRecord } = await queueControlRequest({
+        source,
+        task,
+        body,
+        auth,
+        channel,
+        sourceLabel,
+        reply: body.reply || body.reply_url || body.response_url || '',
+      });
+      const payload = makeQueueResponse(requestRecord, plan, {
+        auth,
+        approvalRequired: true,
+        executionMode: 'queued',
+      });
+      await audit('requests.create', request, {
+        requestId: requestRecord.id,
+        source,
+        channel,
+        task,
+        plan,
+      });
+      sendJson(response, 201, payload, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    } catch (error) {
+      await audit('requests.create.error', request, { error: error.message || String(error) });
+      sendJson(response, 500, { ok: false, error: error.message || String(error) }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    }
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname.startsWith('/api/requests/') && url.pathname.endsWith('/approve')) {
+    try {
+      const { body, auth } = await readAuthAndBody(request, url);
+      const id = url.pathname.split('/').filter(Boolean)[2] || '';
+      const current = await loadRequestRecord(id);
+      if (!current) {
+        sendJson(response, 404, { ok: false, error: 'request_not_found' }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+      if (current.status === 'executed') {
+        sendJson(response, 200, {
+          ok: true,
+          alreadyExecuted: true,
+          request: current,
+          plan: current.plan || null,
+          executionResults: current.executionResults || [],
+        }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+
+      const result = await approveQueuedRequest(id, { request, auth, body });
+      if (!result) {
+        sendJson(response, 404, { ok: false, error: 'request_not_found' }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+      sendJson(response, 200, {
+        ok: true,
+        request: result.requestRecord,
+        plan: result.plan,
+        executionResults: result.executionResults,
+      }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    } catch (error) {
+      const id = url.pathname.split('/').filter(Boolean)[2] || '';
+      await persistRequestRecord((record) => ({
+        ...record,
+        status: 'failed',
+        executionError: error.message || String(error),
+        failedAt: new Date().toISOString(),
+      }), id).catch(() => null);
+      await audit('requests.approve.error', request, { error: error.message || String(error), requestId: id });
+      sendJson(response, 500, { ok: false, error: error.message || String(error) }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    }
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname.startsWith('/api/requests/') && url.pathname.endsWith('/reject')) {
+    try {
+      const { body, auth } = await readAuthAndBody(request, url);
+      const id = url.pathname.split('/').filter(Boolean)[2] || '';
+      const rejected = await rejectQueuedRequest(id, { request, auth, body });
+      if (!rejected) {
+        sendJson(response, 404, { ok: false, error: 'request_not_found' }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+      sendJson(response, 200, {
+        ok: true,
+        request: rejected,
+      }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    } catch (error) {
+      await audit('requests.reject.error', request, { error: error.message || String(error) });
       sendJson(response, 500, { ok: false, error: error.message || String(error) }, {
         'access-control-allow-origin': getResponseOrigin(request),
         vary: 'Origin',
@@ -587,6 +1038,34 @@ const server = http.createServer(async (request, response) => {
       const task = body.task || body.prompt || '';
       const previewOnly = body.preview === true || body.execute === false;
       const plan = await buildControlPlan(task, body.context || '');
+      const approvalRequired = isApprovalRequired() && !isLocalFastPath(auth);
+      if (!previewOnly && approvalRequired) {
+        const { requestRecord } = await queueControlRequest({
+          source: 'api.control',
+          task,
+          body,
+          auth,
+          channel: 'api',
+          sourceLabel: 'api.control',
+          reply: body.reply || body.reply_url || body.response_url || '',
+        });
+        const payload = makeQueueResponse(requestRecord, plan, {
+          auth,
+          approvalRequired: true,
+          executionMode: 'queued',
+        });
+        await audit('control.task.queued', request, {
+          task,
+          plan,
+          requestId: requestRecord.id,
+          source: 'api.control',
+        });
+        sendJson(response, 202, payload, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
       let executionResults = [];
       if (!previewOnly) {
         executionResults = await executeControlPlan(plan);
@@ -596,6 +1075,8 @@ const server = http.createServer(async (request, response) => {
         summary: plan.summary,
         plan,
         executed: !previewOnly,
+        queued: false,
+        approvalRequired: approvalRequired,
         results: executionResults,
         auth,
       };
@@ -622,8 +1103,45 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'POST' && url.pathname === '/webhooks/slack') {
     try {
       const body = await readBody(request);
+      const secretCheck = verifySharedWebhookSecret(request, body, slackWebhookSecret, 'x-openhermes-slack-secret');
+      if (!secretCheck.ok) {
+        await audit('webhook.slack.denied', request, { reason: secretCheck.reason });
+        sendJson(response, 401, { ok: false, error: secretCheck.reason }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
       if (body.challenge) {
         sendJson(response, 200, { challenge: body.challenge }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+      const text = readSlackText(body);
+      if (looksLikeRemoteControlRequest(text)) {
+        const { plan, requestRecord } = await queueControlRequest({
+          source: 'webhook.slack',
+          task: text,
+          body,
+          channel: 'slack',
+          sourceLabel: 'slack',
+          reply: body.response_url || body.reply_url || '',
+        });
+        const ack = `요청이 승인 대기열에 등록되었습니다. requestId=${requestRecord.id}`;
+        if (body.response_url || body.reply_url) {
+          await sendWebhookReply(body.response_url || body.reply_url, ack);
+        }
+        await audit('webhook.slack.queued', request, { body, requestId: requestRecord.id, text, plan });
+        sendJson(response, 200, {
+          ok: true,
+          queued: true,
+          requestId: requestRecord.id,
+          summary: plan.summary,
+          request: requestRecord,
+          reply: ack,
+        }, {
           'access-control-allow-origin': getResponseOrigin(request),
           vary: 'Origin',
         });
@@ -632,12 +1150,12 @@ const server = http.createServer(async (request, response) => {
       const result = await handleToolMessage(
         {
           ...body,
-          messages: [{ role: 'user', content: readSlackText(body) }],
+          messages: [{ role: 'user', content: text }],
         },
         'slack',
       );
       await audit('webhook.slack', request, { body, result: Boolean(result?.reply) });
-      sendJson(response, 200, { ok: true, ...result }, {
+      sendJson(response, 200, { ok: true, queued: false, ...result }, {
         'access-control-allow-origin': getResponseOrigin(request),
         vary: 'Origin',
       });
@@ -654,20 +1172,119 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'POST' && url.pathname === '/webhooks/discord') {
     try {
       const body = await readBody(request);
+      const secretCheck = verifySharedWebhookSecret(request, body, discordWebhookSecret, 'x-openhermes-discord-secret');
+      if (!secretCheck.ok) {
+        await audit('webhook.discord.denied', request, { reason: secretCheck.reason });
+        sendJson(response, 401, { ok: false, error: secretCheck.reason }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+      const text = readDiscordText(body);
+      if (looksLikeRemoteControlRequest(text)) {
+        const { plan, requestRecord } = await queueControlRequest({
+          source: 'webhook.discord',
+          task: text,
+          body,
+          channel: 'discord',
+          sourceLabel: 'discord',
+        });
+        await audit('webhook.discord.queued', request, { body, requestId: requestRecord.id, text, plan });
+        sendJson(response, 200, {
+          ok: true,
+          queued: true,
+          requestId: requestRecord.id,
+          summary: plan.summary,
+          request: requestRecord,
+          reply: `요청이 승인 대기열에 등록되었습니다. requestId=${requestRecord.id}`,
+        }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
       const result = await handleToolMessage(
         {
           ...body,
-          messages: [{ role: 'user', content: readDiscordText(body) }],
+          messages: [{ role: 'user', content: text }],
         },
         'discord',
       );
       await audit('webhook.discord', request, { body, result: Boolean(result?.reply) });
-      sendJson(response, 200, { ok: true, ...result }, {
+      sendJson(response, 200, { ok: true, queued: false, ...result }, {
         'access-control-allow-origin': getResponseOrigin(request),
         vary: 'Origin',
       });
     } catch (error) {
       await audit('webhook.discord.error', request, { error: error.message || String(error) });
+      sendJson(response, 500, { ok: false, error: error.message || String(error) }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    }
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/webhooks/github') {
+    try {
+      const rawBody = await readBodyText(request);
+      const body = parseJsonBody(rawBody);
+      const secretCheck = verifyGithubWebhook(request, rawBody);
+      if (!secretCheck.ok) {
+        await audit('webhook.github.denied', request, { reason: secretCheck.reason });
+        sendJson(response, 401, { ok: false, error: secretCheck.reason }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+
+      const text = readGitHubText(body);
+      if (!text && body.action !== 'ping') {
+        sendJson(response, 200, { ok: true, ignored: true, reason: 'no_text' }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+
+      if (looksLikeRemoteControlRequest(text)) {
+        const { plan, requestRecord } = await queueControlRequest({
+          source: 'webhook.github',
+          task: text,
+          body,
+          channel: 'github',
+          sourceLabel: 'github',
+        });
+        await audit('webhook.github.queued', request, { body, requestId: requestRecord.id, text, plan });
+        sendJson(response, 200, {
+          ok: true,
+          queued: true,
+          requestId: requestRecord.id,
+          summary: plan.summary,
+          request: requestRecord,
+        }, {
+          'access-control-allow-origin': getResponseOrigin(request),
+          vary: 'Origin',
+        });
+        return;
+      }
+
+      const result = await handleToolMessage(
+        {
+          ...body,
+          messages: [{ role: 'user', content: text || 'GitHub webhook event received.' }],
+        },
+        'github',
+      );
+      await audit('webhook.github', request, { body, result: Boolean(result?.reply) });
+      sendJson(response, 200, { ok: true, queued: false, ...result }, {
+        'access-control-allow-origin': getResponseOrigin(request),
+        vary: 'Origin',
+      });
+    } catch (error) {
+      await audit('webhook.github.error', request, { error: error.message || String(error) });
       sendJson(response, 500, { ok: false, error: error.message || String(error) }, {
         'access-control-allow-origin': getResponseOrigin(request),
         vary: 'Origin',
@@ -684,12 +1301,18 @@ const server = http.createServer(async (request, response) => {
       'GET /api/audit',
       'GET /api/permissions/status',
       'POST /api/permissions/request',
+      'GET /api/requests',
+      'POST /api/requests',
+      'GET /api/requests/:id',
+      'POST /api/requests/:id/approve',
+      'POST /api/requests/:id/reject',
       'POST /api/chat',
       'POST /api/control',
       'POST /api/automation/execute',
       'POST /api/automation/app',
       'POST /webhooks/slack',
       'POST /webhooks/discord',
+      'POST /webhooks/github',
     ],
   }, {
     'access-control-allow-origin': getResponseOrigin(request),

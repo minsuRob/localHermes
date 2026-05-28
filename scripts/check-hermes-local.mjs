@@ -209,6 +209,18 @@ async function checkProxy() {
     pass('감사 로그 API 응답');
   }
 
+  const requestsResponse = await fetch(`${proxyUrl}/api/requests?limit=1`, {
+    headers: createClientAuthHeaders({
+      token: process.env.OPENHERMES_API_TOKEN || '',
+      secret: process.env.OPENHERMES_API_SECRET || '',
+      method: 'GET',
+      pathname: '/api/requests?limit=1',
+    }),
+  }).catch(() => null);
+  if (requestsResponse && requestsResponse.ok) {
+    pass('요청 큐 API 응답');
+  }
+
   const controlResponse = await fetch(`${proxyUrl}/api/control`, {
     method: 'POST',
     headers: {

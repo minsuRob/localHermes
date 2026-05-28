@@ -697,6 +697,90 @@ input {
   padding-right: 0.1rem;
 }
 
+.queueList {
+  display: grid;
+  gap: 0.65rem;
+  max-height: 380px;
+  overflow: auto;
+  padding-right: 0.1rem;
+}
+
+.queueItem {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.85rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.queueTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  align-items: start;
+}
+
+.queueMeta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.queueBadge {
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.queueBadge.pending {
+  background: rgba(79, 163, 255, 0.15);
+  color: #9bd0ff;
+}
+
+.queueBadge.approved {
+  background: rgba(83, 209, 143, 0.15);
+  color: #9ef1c5;
+}
+
+.queueBadge.executed {
+  background: rgba(83, 209, 143, 0.1);
+  color: #9ef1c5;
+}
+
+.queueBadge.rejected,
+.queueBadge.failed {
+  background: rgba(241, 110, 110, 0.14);
+  color: #ff9d9d;
+}
+
+.queueSource,
+.queueTime,
+.queueSub {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.queueTitle {
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.queueSub {
+  word-break: break-word;
+}
+
+.queueActions {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
 .auditItem {
   padding: 0.75rem;
   border-radius: 16px;
@@ -831,5 +915,13 @@ input {
 
   .controlRail {
     max-height: none;
+  }
+
+  .queueTop {
+    flex-direction: column;
+  }
+
+  .queueActions {
+    flex-direction: column;
   }
 }

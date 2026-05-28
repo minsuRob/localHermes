@@ -13,6 +13,7 @@ Slack/Discord webhook 프록시, 컴퓨터 사용(computer use)형 macOS 앱 제
 - 활성 MCP: `filesystem`, `fetch`, `macos-automator`, `chrome-devtools`, `shell`, `local-memory`, `local-status`
 - 배포: GitHub Pages + `gh-pages` 브랜치
 - 컴퓨터 사용: `openhermes permissions`, `openhermes automate`
+- 외부 진입점: `openhermes proxy --serve` 또는 `openhermes proxy --funnel`
 
 ## 2) 모델 경로 환경변수
 
@@ -35,6 +36,7 @@ source ~/.zshrc
 npm run openhermes -- status
 npm run openhermes -- start
 npm run openhermes -- web
+npm run openhermes -- proxy --funnel
 npm run openhermes -- verify
 npm run openhermes -- deploy-pages --proxy-url https://<your-tailscale-funnel-url>
 ```
@@ -49,6 +51,7 @@ npm run openhermes -- deploy-pages --proxy-url https://<your-tailscale-funnel-ur
 - `control`: 자연어 프롬프트를 실행 계획으로 바꿔 실제 macOS 동작 실행
 - `verify`: 로컬 Hermes/LLM/MCP 검증
 - `deploy-pages`: `dist` 빌드 후 GitHub Pages 브랜치로 게시
+- `proxy`: API 프록시만 시작, `--serve`는 tailnet URL, `--funnel`은 공개 URL
 
 ## 4) llama.cpp 서버 실행 표준
 
@@ -192,15 +195,22 @@ node scripts/check-hermes-local.mjs
 `deploy:pages`는 `gh-pages` 브랜치에 정적 파일을 게시하고, Pages 설정이 없으면 `gh api`로 초기화합니다.
 
 `VITE_PROXY_URL` 또는 `OPENHERMES_PROXY_URL`을 설정하면 Pages 빌드에 그 URL이 기본값으로 들어갑니다.
-`OPENHERMES_API_TOKEN` / `OPENHERMES_API_SECRET`을 설정하면 `chat`, `control`, `permissions`, `automate`, `audit` 같은 보호된 엔드포인트가 서명 검증을 요구합니다. 로컬 루프백에서는 편의를 위해 무서명 허용이 남아 있습니다.
+`OPENHERMES_API_TOKEN` / `OPENHERMES_API_SECRET`을 설정하면 `chat`, `control`, `permissions`, `automate`, `audit`, `requests` 같은 보호된 엔드포인트가 서명 검증을 요구합니다. 로컬 루프백에서는 편의를 위해 무서명 허용이 남아 있습니다.
+
+외부 채널 승인 흐름:
+
+1. Slack, Discord, GitHub webhook, 또는 Pages UI에서 요청을 보냅니다.
+2. `POST /api/requests` 또는 `POST /api/control`은 외부 요청일 때 승인 대기열에 넣습니다.
+3. UI의 `승인 대기함`에서 `승인 후 실행` 또는 `거절`을 누릅니다.
+4. 승인되면 Hermes가 macOS 자동화를 실행하고 결과가 감사 로그에 남습니다.
 
 웹 UI의 `Computer Use` 패널은 실제 프롬프트 창입니다. 예를 들어 `Chrome으로 daum.net 열어줘`를 넣고 실행하면, Hermes가 계획을 만들고 macOS 자동화가 실제로 실행됩니다.
 
 주의:
 
-- 공개 GitHub Pages에서 브라우저가 `localhost`나 Tailscale/private 네트워크 프록시를 직접 호출하면 브라우저 정책상 차단될 수 있습니다.
-- 이 경우 UI는 연결 실패를 에러로 터뜨리기보다, 로컬 모드 사용 또는 공개 릴레이 연결을 안내합니다.
-- 실제 대화/맥 제어는 로컬 `openhermes web` 또는 브라우저 정책을 만족하는 공개 API 릴레이에서 사용하는 것이 가장 안정적입니다.
+- 공개 GitHub Pages는 `OPENHERMES_PROXY_URL`에 들어간 Funnel URL을 호출해야 정상 동작합니다.
+- 외부 요청은 기본적으로 승인 후 실행됩니다. `OPENHERMES_LOCAL_FASTPATH=true`일 때만 루프백에서 즉시 실행할 수 있습니다.
+- Slack/Discord/GitHub webhook은 각각 `OPENHERMES_SLACK_WEBHOOK_SECRET`, `OPENHERMES_DISCORD_WEBHOOK_SECRET`, `OPENHERMES_GITHUB_WEBHOOK_SECRET`로 보호할 수 있습니다.
 
 ## 11) 범위
 
