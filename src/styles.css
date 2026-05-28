@@ -498,6 +498,11 @@ input {
   font-size: 0.82rem;
 }
 
+.statusAction.active {
+  border-color: rgba(79, 163, 255, 0.55);
+  background: rgba(79, 163, 255, 0.14);
+}
+
 .ghostButton {
   font-size: 0.84rem;
 }
@@ -508,6 +513,14 @@ input {
   gap: 1rem;
   min-height: 0;
   padding: 0 1.35rem 1.2rem;
+}
+
+.contentGrid.chatOnly {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.contentGrid.withRail {
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.92fr);
 }
 
 .conversationShell {
@@ -521,6 +534,16 @@ input {
   min-width: 0;
   overflow: auto;
   padding-bottom: 0.2rem;
+}
+
+.railCardCompact {
+  min-width: 0;
+}
+
+.contentGrid.chatOnly .conversationShell {
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .railCard {
@@ -748,6 +771,15 @@ input {
     grid-template-columns: 1fr;
   }
 
+  .contentGrid.withRail {
+    grid-template-columns: 1fr;
+  }
+
+  .contentGrid.chatOnly .conversationShell,
+  .contentGrid.withRail .conversationShell {
+    max-width: none;
+  }
+
   .upgradeCard {
     width: min(100%, 240px);
   }
@@ -795,5 +827,9 @@ input {
 
   .miniRow {
     grid-template-columns: 1fr;
+  }
+
+  .controlRail {
+    max-height: none;
   }
 }

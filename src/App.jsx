@@ -195,6 +195,7 @@ async function parseAssistantResponse(response, onChunk) {
 
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [controlRailOpen, setControlRailOpen] = useState(false);
   const [sessions, setSessions] = useState(() => loadJson(STORAGE_KEYS.sessions, initialSessions));
   const [activeSessionId, setActiveSessionId] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.activeSessionId) || initialSessions[0].id;
@@ -630,6 +631,14 @@ export default function App() {
             <button className="statusAction" type="button" onClick={refreshPermissionStatus}>
               권한 새로고침
             </button>
+            <button
+              className={`statusAction ${controlRailOpen ? 'active' : ''}`}
+              type="button"
+              onClick={() => setControlRailOpen((current) => !current)}
+              aria-pressed={controlRailOpen}
+            >
+              {controlRailOpen ? '제어창 닫기' : '제어창 열기'}
+            </button>
           </div>
         </header>
 
@@ -659,7 +668,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="contentGrid">
+        <section className={`contentGrid ${controlRailOpen ? 'withRail' : 'chatOnly'}`}>
           <section className="conversationShell">
             <div className="messages">
               {(activeSession?.messages || []).map((message) => (
@@ -701,167 +710,172 @@ export default function App() {
             </div>
           </section>
 
-          <aside className="controlRail">
-            <section className="railCard">
-              <div className="railHeader">
-                <div>
-                  <div className="sectionLabel">Computer Use</div>
-                  <h3>실제 프롬프트로 macOS 제어</h3>
-                </div>
-              </div>
-              <form className="computerForm" onSubmit={submitComputerPrompt}>
-                <label className="fieldLabel">
-                  Prompt
-                  <textarea
-                    value={computerPrompt}
-                    onChange={(event) => setComputerPrompt(event.target.value)}
-                    placeholder="예: Chrome으로 daum.net 열어줘"
-                    rows={4}
-                  />
-                </label>
-                <div className="buttonGrid">
-                  <button type="submit" className="railButton" disabled={computerSending}>
-                    {computerSending ? '실행 중...' : '실행'}
-                  </button>
-                  <button type="button" className="railButton" onClick={() => setComputerPrompt('Chrome으로 daum.net 열어줘')}>
-                    Daum 예시
-                  </button>
-                  <button type="button" className="railButton" onClick={() => setComputerPrompt('Cursor를 열어줘')}>
-                    Cursor 예시
-                  </button>
-                  <button type="button" className="railButton" onClick={() => setComputerPrompt('시스템 Automation 권한 창을 열어줘')}>
-                    권한 창
-                  </button>
-                </div>
-              </form>
-              <div className="actionCard">
-                <div className="actionTitle">실행 결과</div>
-                <div className="actionDesc">
-                  {computerResult
-                    ? (computerResult.summary || computerResult.error || JSON.stringify(computerResult.plan || computerResult).slice(0, 240))
-                    : '아직 실행한 프롬프트가 없습니다.'}
-                </div>
-              </div>
-            </section>
-
-            <section className="railCard">
-              <div className="railHeader">
-                <div>
-                  <div className="sectionLabel">권한 센터</div>
-                  <h3>macOS 컴퓨터 사용 권한</h3>
-                </div>
-                <button className="ghostButton" type="button" onClick={refreshPermissionStatus}>
-                  새로고침
-                </button>
-              </div>
-              <div className="permissionGrid">
-                <div className="permissionItem">
-                  <span className="permissionKey">Automation</span>
-                  <span className={`permissionValue ${permissionStatus?.automation?.state || 'unknown'}`}>{permissionStatus?.automation?.state || 'unknown'}</span>
-                </div>
-                <div className="permissionItem">
-                  <span className="permissionKey">Accessibility</span>
-                  <span className={`permissionValue ${permissionStatus?.accessibility?.state || 'unknown'}`}>{permissionStatus?.accessibility?.state || 'unknown'}</span>
-                </div>
-                <div className="permissionItem">
-                  <span className="permissionKey">Screen</span>
-                  <span className={`permissionValue ${permissionStatus?.screenRecording?.state || 'unknown'}`}>{permissionStatus?.screenRecording?.state || 'unknown'}</span>
-                </div>
-                <div className="permissionItem">
-                  <span className="permissionKey">Files</span>
-                  <span className={`permissionValue ${permissionStatus?.filesAndFolders?.state || 'unknown'}`}>{permissionStatus?.filesAndFolders?.state || 'unknown'}</span>
-                </div>
-              </div>
-              <div className="buttonGrid">
-                <button type="button" className="railButton" onClick={() => requestPermission('automation')}>Automation 요청</button>
-                <button type="button" className="railButton" onClick={() => requestPermission('accessibility')}>Accessibility 요청</button>
-                <button type="button" className="railButton" onClick={() => requestPermission('screenrecording')}>Screen 요청</button>
-                <button type="button" className="railButton" onClick={() => requestPermission('filesandfolders')}>Files 요청</button>
-              </div>
-              <div className="miniList">
-                <div className="miniRow">
-                  <span>Automation</span>
-                  <span>{permissionStatus?.automation?.details || 'probe pending'}</span>
-                </div>
-                <div className="miniRow">
-                  <span>Accessibility</span>
-                  <span>{permissionStatus?.accessibility?.details || 'probe pending'}</span>
-                </div>
-                <div className="miniRow">
-                  <span>Screen</span>
-                  <span>{permissionStatus?.screenRecording?.details || 'probe pending'}</span>
-                </div>
-              </div>
-            </section>
-
-            <section className="railCard">
-              <div className="railHeader">
-                <div>
-                  <div className="sectionLabel">앱 제어</div>
-                  <h3>Chrome · Cursor · Codex · System Settings</h3>
-                </div>
-              </div>
-              <div className="buttonGrid">
-                <button type="button" className="railButton" onClick={() => runAutomation('launch', { app: 'Google Chrome' })}>Chrome launch</button>
-                <button type="button" className="railButton" onClick={() => runAutomation('focus', { app: 'Google Chrome' })}>Chrome focus</button>
-                <button type="button" className="railButton" onClick={() => runAutomation('openUrl', { app: 'Google Chrome', url: 'https://www.google.com' })}>Chrome open URL</button>
-                <button type="button" className="railButton" onClick={() => runAutomation('launch', { app: 'Cursor' })}>Cursor launch</button>
-                <button type="button" className="railButton" onClick={() => runAutomation('focus', { app: 'Cursor' })}>Cursor focus</button>
-                <button type="button" className="railButton" onClick={() => runAutomation('launch', { app: 'Codex' })}>Codex launch</button>
-                <button type="button" className="railButton" onClick={() => runAutomation('focus', { app: 'Codex' })}>Codex focus</button>
-                <button type="button" className="railButton" onClick={() => runAutomation('openSystemPane', { pane: 'automation' })}>System Automation</button>
-                <button type="button" className="railButton" onClick={() => runAutomation('openSystemPane', { pane: 'accessibility' })}>System Accessibility</button>
-              </div>
-              <div className="actionCard">
-                <div className="actionTitle">빠른 실행</div>
-                <div className="actionDesc">브라우저, 시스템 설정, 앱 포커스 전환을 버튼으로 실행합니다.</div>
-              </div>
-            </section>
-
-            <section className="railCard">
-              <div className="railHeader">
-                <div>
-                  <div className="sectionLabel">감사 로그</div>
-                  <h3>최근 제어 기록</h3>
-                </div>
-                <button className="ghostButton" type="button" onClick={refreshAudit}>새로고침</button>
-              </div>
-              <div className="auditList">
-                {auditRecords.length ? auditRecords.map((record, index) => (
-                  <div key={`${record.ts || 'audit'}-${index}`} className="auditItem">
-                    <div className="auditTop">
-                      <span>{record.event || 'event'}</span>
-                      <span>{formatTime(record.ts || new Date().toISOString())}</span>
-                    </div>
-                    <div className="auditBody">{record.error || record.reason || record.path || record.method || 'ok'}</div>
+          {controlRailOpen && (
+            <aside className="controlRail">
+              <section className="railCard railCardCompact">
+                <div className="railHeader">
+                  <div>
+                    <div className="sectionLabel">Computer Use</div>
+                    <h3>실제 프롬프트로 macOS 제어</h3>
                   </div>
-                )) : (
-                  <div className="emptyAudit">아직 감사 로그가 없습니다.</div>
-                )}
-              </div>
-            </section>
-
-            <section className="railCard">
-              <div className="railHeader">
-                <div>
-                  <div className="sectionLabel">연결 설정</div>
-                  <h3>프록시 / 서명</h3>
+                  <button className="ghostButton" type="button" onClick={() => setControlRailOpen(false)}>
+                    닫기
+                  </button>
                 </div>
-              </div>
-              <label className="fieldLabel">
-                Proxy URL
-                <input value={proxyUrl} onChange={(event) => setProxyUrl(normalizeBaseUrl(event.target.value))} placeholder="http://127.0.0.1:8787" />
-              </label>
-              <label className="fieldLabel">
-                API Token
-                <input value={apiToken} onChange={(event) => setApiToken(event.target.value)} placeholder="선택" />
-              </label>
-              <label className="fieldLabel">
-                API Secret
-                <input value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} placeholder="선택" />
-              </label>
-            </section>
-          </aside>
+                <form className="computerForm" onSubmit={submitComputerPrompt}>
+                  <label className="fieldLabel">
+                    Prompt
+                    <textarea
+                      value={computerPrompt}
+                      onChange={(event) => setComputerPrompt(event.target.value)}
+                      placeholder="예: Chrome으로 daum.net 열어줘"
+                      rows={3}
+                    />
+                  </label>
+                  <div className="buttonGrid">
+                    <button type="submit" className="railButton" disabled={computerSending}>
+                      {computerSending ? '실행 중...' : '실행'}
+                    </button>
+                    <button type="button" className="railButton" onClick={() => setComputerPrompt('Chrome으로 daum.net 열어줘')}>
+                      Daum 예시
+                    </button>
+                    <button type="button" className="railButton" onClick={() => setComputerPrompt('Cursor를 열어줘')}>
+                      Cursor 예시
+                    </button>
+                    <button type="button" className="railButton" onClick={() => setComputerPrompt('시스템 Automation 권한 창을 열어줘')}>
+                      권한 창
+                    </button>
+                  </div>
+                </form>
+                <div className="actionCard">
+                  <div className="actionTitle">실행 결과</div>
+                  <div className="actionDesc">
+                    {computerResult
+                      ? (computerResult.summary || computerResult.error || JSON.stringify(computerResult.plan || computerResult).slice(0, 240))
+                      : '아직 실행한 프롬프트가 없습니다.'}
+                  </div>
+                </div>
+              </section>
+
+              <section className="railCard railCardCompact">
+                <div className="railHeader">
+                  <div>
+                    <div className="sectionLabel">권한 센터</div>
+                    <h3>macOS 컴퓨터 사용 권한</h3>
+                  </div>
+                  <button className="ghostButton" type="button" onClick={refreshPermissionStatus}>
+                    새로고침
+                  </button>
+                </div>
+                <div className="permissionGrid">
+                  <div className="permissionItem">
+                    <span className="permissionKey">Automation</span>
+                    <span className={`permissionValue ${permissionStatus?.automation?.state || 'unknown'}`}>{permissionStatus?.automation?.state || 'unknown'}</span>
+                  </div>
+                  <div className="permissionItem">
+                    <span className="permissionKey">Accessibility</span>
+                    <span className={`permissionValue ${permissionStatus?.accessibility?.state || 'unknown'}`}>{permissionStatus?.accessibility?.state || 'unknown'}</span>
+                  </div>
+                  <div className="permissionItem">
+                    <span className="permissionKey">Screen</span>
+                    <span className={`permissionValue ${permissionStatus?.screenRecording?.state || 'unknown'}`}>{permissionStatus?.screenRecording?.state || 'unknown'}</span>
+                  </div>
+                  <div className="permissionItem">
+                    <span className="permissionKey">Files</span>
+                    <span className={`permissionValue ${permissionStatus?.filesAndFolders?.state || 'unknown'}`}>{permissionStatus?.filesAndFolders?.state || 'unknown'}</span>
+                  </div>
+                </div>
+                <div className="buttonGrid">
+                  <button type="button" className="railButton" onClick={() => requestPermission('automation')}>Automation 요청</button>
+                  <button type="button" className="railButton" onClick={() => requestPermission('accessibility')}>Accessibility 요청</button>
+                  <button type="button" className="railButton" onClick={() => requestPermission('screenrecording')}>Screen 요청</button>
+                  <button type="button" className="railButton" onClick={() => requestPermission('filesandfolders')}>Files 요청</button>
+                </div>
+                <div className="miniList">
+                  <div className="miniRow">
+                    <span>Automation</span>
+                    <span>{permissionStatus?.automation?.details || 'probe pending'}</span>
+                  </div>
+                  <div className="miniRow">
+                    <span>Accessibility</span>
+                    <span>{permissionStatus?.accessibility?.details || 'probe pending'}</span>
+                  </div>
+                  <div className="miniRow">
+                    <span>Screen</span>
+                    <span>{permissionStatus?.screenRecording?.details || 'probe pending'}</span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="railCard railCardCompact">
+                <div className="railHeader">
+                  <div>
+                    <div className="sectionLabel">앱 제어</div>
+                    <h3>Chrome · Cursor · Codex · System Settings</h3>
+                  </div>
+                </div>
+                <div className="buttonGrid">
+                  <button type="button" className="railButton" onClick={() => runAutomation('launch', { app: 'Google Chrome' })}>Chrome launch</button>
+                  <button type="button" className="railButton" onClick={() => runAutomation('focus', { app: 'Google Chrome' })}>Chrome focus</button>
+                  <button type="button" className="railButton" onClick={() => runAutomation('openUrl', { app: 'Google Chrome', url: 'https://www.google.com' })}>Chrome open URL</button>
+                  <button type="button" className="railButton" onClick={() => runAutomation('launch', { app: 'Cursor' })}>Cursor launch</button>
+                  <button type="button" className="railButton" onClick={() => runAutomation('focus', { app: 'Cursor' })}>Cursor focus</button>
+                  <button type="button" className="railButton" onClick={() => runAutomation('launch', { app: 'Codex' })}>Codex launch</button>
+                  <button type="button" className="railButton" onClick={() => runAutomation('focus', { app: 'Codex' })}>Codex focus</button>
+                  <button type="button" className="railButton" onClick={() => runAutomation('openSystemPane', { pane: 'automation' })}>System Automation</button>
+                  <button type="button" className="railButton" onClick={() => runAutomation('openSystemPane', { pane: 'accessibility' })}>System Accessibility</button>
+                </div>
+                <div className="actionCard">
+                  <div className="actionTitle">빠른 실행</div>
+                  <div className="actionDesc">브라우저, 시스템 설정, 앱 포커스 전환을 버튼으로 실행합니다.</div>
+                </div>
+              </section>
+
+              <section className="railCard railCardCompact">
+                <div className="railHeader">
+                  <div>
+                    <div className="sectionLabel">감사 로그</div>
+                    <h3>최근 제어 기록</h3>
+                  </div>
+                  <button className="ghostButton" type="button" onClick={refreshAudit}>새로고침</button>
+                </div>
+                <div className="auditList">
+                  {auditRecords.length ? auditRecords.map((record, index) => (
+                    <div key={`${record.ts || 'audit'}-${index}`} className="auditItem">
+                      <div className="auditTop">
+                        <span>{record.event || 'event'}</span>
+                        <span>{formatTime(record.ts || new Date().toISOString())}</span>
+                      </div>
+                      <div className="auditBody">{record.error || record.reason || record.path || record.method || 'ok'}</div>
+                    </div>
+                  )) : (
+                    <div className="emptyAudit">아직 감사 로그가 없습니다.</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="railCard railCardCompact">
+                <div className="railHeader">
+                  <div>
+                    <div className="sectionLabel">연결 설정</div>
+                    <h3>프록시 / 서명</h3>
+                  </div>
+                </div>
+                <label className="fieldLabel">
+                  Proxy URL
+                  <input value={proxyUrl} onChange={(event) => setProxyUrl(normalizeBaseUrl(event.target.value))} placeholder="http://127.0.0.1:8787" />
+                </label>
+                <label className="fieldLabel">
+                  API Token
+                  <input value={apiToken} onChange={(event) => setApiToken(event.target.value)} placeholder="선택" />
+                </label>
+                <label className="fieldLabel">
+                  API Secret
+                  <input value={apiSecret} onChange={(event) => setApiSecret(event.target.value)} placeholder="선택" />
+                </label>
+              </section>
+            </aside>
+          )}
         </section>
       </main>
     </div>
