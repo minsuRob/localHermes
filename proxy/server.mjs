@@ -233,6 +233,7 @@ function inferControlPlan(promptText) {
   const browserMatch = lower.includes('chrome') || lower.includes('크롬') || lower.includes('google');
   const cursorMatch = lower.includes('cursor');
   const codexMatch = lower.includes('codex');
+  const zedMatch = lower.includes('zed') || lower.includes('제드');
 
   const urlMatch = prompt.match(/https?:\/\/[^\s]+/i);
   const domainMatch = prompt.match(/\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|co\.kr|kr|dev)\b/i);
@@ -251,6 +252,10 @@ function inferControlPlan(promptText) {
 
   if (codexMatch) {
     actions.push({ action: 'launch', app: 'Codex' });
+  }
+
+  if (zedMatch) {
+    actions.push({ action: 'launch', app: 'Zed' });
   }
 
   if (/설정|권한|permission|privacy/i.test(prompt)) {

@@ -64,6 +64,33 @@ function normalizeBaseUrl(value) {
   return value.replace(/\/+$/, '');
 }
 
+function looksLikeComputerUsePrompt(text) {
+  const lower = String(text || '').toLowerCase();
+  const hasAppIntent =
+    /(?:열어|켜|실행|launch|open|focus|visit|방문|시작)/i.test(lower) ||
+    lower.includes('app') ||
+    lower.includes('어플') ||
+    lower.includes('어플리케이션');
+  const mentionsControlTargets =
+    lower.includes('chrome') ||
+    lower.includes('크롬') ||
+    lower.includes('cursor') ||
+    lower.includes('codex') ||
+    lower.includes('zed') ||
+    lower.includes('제드') ||
+    lower.includes('system settings') ||
+    lower.includes('설정') ||
+    lower.includes('github') ||
+    lower.includes('daum') ||
+    lower.includes('naver') ||
+    lower.includes('google') ||
+    lower.includes('youtube') ||
+    lower.includes('url') ||
+    /(?:https?:\/\/|www\.|[a-z0-9-]+\.(?:com|net|org|io|co\.kr|kr|dev))/i.test(lower) ||
+    /^https?:\/\//i.test(lower);
+  return hasAppIntent && mentionsControlTargets;
+}
+
 function textEncoder() {
   return new TextEncoder();
 }
@@ -420,6 +447,33 @@ export default function App() {
     }));
 
     try {
+      if (looksLikeComputerUsePrompt(text)) {
+        const response = await apiRequest('/api/control', {
+          method: 'POST',
+          body: {
+            task: text,
+            execute: true,
+          },
+        });
+        const summary = response?.summary || '컴퓨터 제어를 실행했습니다.';
+        updateActiveSession((session) => ({
+          ...session,
+          updatedAt: new Date().toISOString(),
+          messages: session.messages.map((message) =>
+            message.id === assistantId
+              ? {
+                  ...message,
+                  content: `${summary}\n\n${JSON.stringify(response?.plan || response, null, 2)}`,
+                }
+              : message,
+          ),
+        }));
+        setActionStatus(`컴퓨터 제어 완료: ${summary}`);
+        await refreshAudit();
+        setSending(false);
+        return;
+      }
+
       const requestBody = {
         messages: [...activeSession.messages, userMessage].map((message) => ({
           role: message.role,
