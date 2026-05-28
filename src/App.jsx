@@ -276,6 +276,7 @@ export default function App() {
       : '로컬 Hermes 연결 대기 중'
   ));
   const endRef = useRef(null);
+  const proxyInputRef = useRef(null);
 
   const activeSession = useMemo(() => {
     return sessions.find((item) => item.id === activeSessionId) || sessions[0];
@@ -357,7 +358,8 @@ export default function App() {
   }
 
   function applyProxyDraft() {
-    const next = normalizeProxyInput(proxyDraft);
+    const liveDraft = proxyInputRef.current?.value ?? proxyDraft;
+    const next = normalizeProxyInput(liveDraft);
     if (!next) {
       setProxyDraft('');
       setProxyUrl('');
@@ -1066,6 +1068,7 @@ export default function App() {
             <label className="fieldLabel">
               Proxy URL
               <input
+                ref={proxyInputRef}
                 value={proxyDraft}
                 onChange={(event) => setProxyDraft(event.target.value)}
                 onKeyDown={(event) => {
