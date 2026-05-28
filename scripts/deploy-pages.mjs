@@ -18,6 +18,53 @@ function run(command, args, env = {}) {
   });
 }
 
+async function capture(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: rootDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve(stdout);
+      } else {
+        reject(new Error(stderr || `${command} ${args.join(' ')} failed`));
+      }
+    });
+  });
+}
+
+async function resolveTailnetProxyUrl() {
+  const serveStatusRaw = await capture('tailscale', ['serve', 'status', '--json']).catch(() => '');
+  if (!serveStatusRaw.trim()) {
+    return '';
+  }
+
+  try {
+    const parsed = JSON.parse(serveStatusRaw);
+    for (const [host, handlers] of Object.entries(parsed.Web || {})) {
+      const proxyUrl = handlers?.Handlers?.['/']?.Proxy || '';
+      if (proxyUrl) {
+        const normalizedHost = host.replace(/:443$/, '');
+        return `https://${normalizedHost}`;
+      }
+    }
+  } catch {
+    return '';
+  }
+
+  return '';
+}
+
 async function ensurePages(owner, repo) {
   const get = spawn('gh', ['api', `repos/${owner}/${repo}/pages`], {
     cwd: rootDir,
@@ -39,7 +86,12 @@ async function ensurePages(owner, repo) {
 }
 
 async function main() {
-  const proxyUrl = (process.env.OPENHERMES_PROXY_URL || process.env.VITE_PROXY_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '');
+  const proxyUrl = (
+    process.env.OPENHERMES_PROXY_URL ||
+    process.env.VITE_PROXY_URL ||
+    await resolveTailnetProxyUrl() ||
+    'http://127.0.0.1:8787'
+  ).replace(/\/+$/, '');
   const buildCode = await run('npm', ['run', 'build'], {
     VITE_BASE: process.env.VITE_BASE || '/localHermes/',
     VITE_PROXY_URL: proxyUrl,
