@@ -95,7 +95,7 @@ function isPublicBrowser() {
 }
 
 function isPrivateProxyUrl(value) {
-  return /^(https?:\/\/)?(127\.0\.0\.1|localhost|[^/]+\.ts\.net)(:\d+)?(\/|$)/i.test(String(value || '').trim());
+  return /^(https?:\/\/)?(127\.0\.0\.1|localhost|::1)(:\d+)?(\/|$)/i.test(String(value || '').trim());
 }
 
 function getQueryProxyUrl() {
