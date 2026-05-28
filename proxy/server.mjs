@@ -239,46 +239,121 @@ function extractJsonBlock(text) {
   return (fenced ? fenced[1] : raw).trim();
 }
 
-function inferControlPlan(promptText) {
+function containsAny(text, patterns = []) {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function inferPreferredBrowserUrl(prompt, lower) {
+  const urlMatch = prompt.match(/https?:\/\/[^\s]+/i);
+  if (urlMatch?.[0]) return urlMatch[0];
+
+  const domainMatch = prompt.match(/\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|co\.kr|kr|dev)\b/i);
+  if (domainMatch?.[0]) return `https://${domainMatch[0]}`;
+
+  if (/(?:네이버|naver)/i.test(lower)) return 'https://www.naver.com';
+  if (/(?:다음|daum)/i.test(lower)) return 'https://www.daum.net';
+  if (/(?:구글|google)/i.test(lower)) return 'https://www.google.com';
+  if (/(?:유튜브|youtube)/i.test(lower)) return 'https://www.youtube.com';
+  return '';
+}
+
+function inferControlActionsFromPrompt(promptText = '', contextText = '') {
   const prompt = String(promptText || '').trim();
-  const lower = prompt.toLowerCase();
+  const context = String(contextText || '').trim();
+  const combined = `${prompt}\n${context}`.trim();
+  const lower = combined.toLowerCase();
   const actions = [];
 
-  const browserMatch = lower.includes('chrome') || lower.includes('크롬') || lower.includes('google');
-  const cursorMatch = lower.includes('cursor');
-  const codexMatch = lower.includes('codex');
-  const zedMatch = lower.includes('zed') || lower.includes('제드');
+  const wantsChrome = containsAny(lower, [
+    /chrome/i,
+    /크롬/i,
+    /브라우저/i,
+    /browser/i,
+    /네이버/i,
+    /naver/i,
+    /다음/i,
+    /daum/i,
+    /google/i,
+    /youtube/i,
+    /url/i,
+  ]);
+  const wantsZed = containsAny(lower, [/zed/i, /제드/i]);
+  const wantsCursor = /cursor/i.test(lower);
+  const wantsCodex = /codex/i.test(lower);
+  const wantsSystemPane = containsAny(lower, [/권한/i, /permission/i, /privacy/i, /설정/i, /system settings/i, /automation/i, /accessibility/i]);
+  const wantsClick = containsAny(lower, [/클릭/i, /눌러/i, /press/i, /click/i, /tap/i, /마우스/i, /버튼/i]);
+  const wantsTyping = containsAny(lower, [/입력/i, /type/i, /검색/i, /search/i, /write/i, /타이핑/i, /엔터/i, /enter/i]);
+  const wantsShell = containsAny(lower, [/cmd/i, /terminal/i, /터미널/i, /shell/i, /zsh/i, /bash/i, /명령/i, /실행/i, /조회/i, /리스트/i, /목록/i]);
+  const wantsFolderListing = containsAny(lower, [/현재\s*폴더/i, /폴더\s*리스트/i, /디렉토리/i, /목록/i, /리스트/i, /ls\b/i]);
+  const wantsBlogClick = containsAny(lower, [/블로그/i, /blog/i]);
+  const browserUrl = inferPreferredBrowserUrl(prompt, lower);
 
-  const urlMatch = prompt.match(/https?:\/\/[^\s]+/i);
-  const domainMatch = prompt.match(/\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|co\.kr|kr|dev)\b/i);
-  const inferredUrl = urlMatch?.[0] || (domainMatch ? `https://${domainMatch[0]}` : '');
-
-  if (browserMatch && /(?:열|open|visit|방문|켜|가|가줘|열어줘)/i.test(prompt)) {
+  if (wantsChrome) {
     actions.push({ action: 'launch', app: 'Google Chrome' });
-    if (inferredUrl) {
-      actions.push({ action: 'openUrl', app: 'Google Chrome', url: inferredUrl });
+    if (browserUrl) {
+      actions.push({ action: 'openUrl', app: 'Google Chrome', url: browserUrl });
+    }
+    if (wantsClick && wantsBlogClick) {
+      actions.push({ action: 'waitFor', timeoutMs: 1200, sleepMs: 1200, condition: { text: '블로그' } });
+      actions.push({
+        action: 'clickText',
+        app: 'Google Chrome',
+        text: '블로그',
+        strategy: 'hybrid',
+        timeoutMs: 7000,
+      });
+    } else if (wantsTyping) {
+      const typedTextMatch = prompt.match(/["“](.+?)["”]/);
+      const typedText = typedTextMatch?.[1] || '';
+      if (typedText) {
+        actions.push({ action: 'waitFor', timeoutMs: 600, sleepMs: 600 });
+        actions.push({ action: 'type', app: 'Google Chrome', text: typedText });
+      }
     }
   }
 
-  if (cursorMatch) {
+  if (wantsZed) {
+    actions.push({ action: 'launch', app: 'Zed' });
+    actions.push({ action: 'focus', app: 'Zed' });
+    if (wantsShell && wantsFolderListing) {
+      const command = containsAny(lower, [/pwd/i]) ? 'pwd && ls -la' : 'ls -la';
+      actions.push({ action: 'waitFor', timeoutMs: 500, sleepMs: 500, condition: { app: 'Zed' } });
+      actions.push({
+        action: 'runShell',
+        app: 'Zed',
+        command,
+        inFocusedTerminal: true,
+      });
+    }
+  }
+
+  if (wantsCursor) {
     actions.push({ action: 'launch', app: 'Cursor' });
   }
 
-  if (codexMatch) {
+  if (wantsCodex) {
     actions.push({ action: 'launch', app: 'Codex' });
   }
 
-  if (zedMatch) {
-    actions.push({ action: 'launch', app: 'Zed' });
+  if (wantsSystemPane) {
+    const pane = /accessibility/i.test(lower) ? 'accessibility' : /screen/i.test(lower) ? 'screenrecording' : /files/i.test(lower) ? 'filesandfolders' : 'automation';
+    actions.push({ action: 'openSystemPane', pane });
   }
 
-  if (/설정|권한|permission|privacy/i.test(prompt)) {
-    actions.push({ action: 'openSystemPane', pane: 'automation' });
-  }
+  return actions;
+}
 
-  if (!actions.length && inferredUrl) {
-    actions.push({ action: 'launch', app: 'Google Chrome' });
-    actions.push({ action: 'openUrl', app: 'Google Chrome', url: inferredUrl });
+function inferControlPlan(promptText, contextText = '') {
+  const prompt = String(promptText || '').trim();
+  const lower = prompt.toLowerCase();
+  const actions = inferControlActionsFromPrompt(prompt, contextText);
+
+  if (!actions.length) {
+    const inferredUrl = inferPreferredBrowserUrl(prompt, lower);
+    if (inferredUrl) {
+      actions.push({ action: 'launch', app: 'Google Chrome' });
+      actions.push({ action: 'openUrl', app: 'Google Chrome', url: inferredUrl });
+    }
   }
 
   if (!actions.length) {
@@ -292,7 +367,7 @@ function inferControlPlan(promptText) {
 }
 
 async function buildControlPlan(promptText, contextText = '') {
-  const heuristicPlan = inferControlPlan(promptText);
+  const heuristicPlan = inferControlPlan(promptText, contextText);
   if (heuristicPlan.actions.some((action) => action.action !== 'probe')) {
     return heuristicPlan;
   }
@@ -301,8 +376,10 @@ async function buildControlPlan(promptText, contextText = '') {
     'You are OpenHermes computer-use planner.',
     'Convert the user request into a compact JSON object only.',
     'No markdown, no prose, no code fences.',
-    'Schema: {"summary":"...", "actions":[{"action":"launch|focus|openUrl|type|shortcut|clickMenuItem|openSystemPane|probe|activateWindow", "app":"...", "url":"...", "text":"...", "pane":"...", "shortcut":{"key":"...","modifiers":["command","shift"]}, "menuPath":{"menu":"...","item":"...","subItem":"..."}, "selectorOrCoords":{"x":0,"y":0}}]}',
+    'Schema: {"summary":"...", "actions":[{"action":"launch|focus|openUrl|waitFor|clickUi|clickText|clickCoordinates|type|press|shortcut|runShell|verify|clickMenuItem|openSystemPane|probe|activateWindow", "app":"...", "url":"...", "text":"...", "pane":"...", "command":"...", "inFocusedTerminal":true, "timeoutMs":1000, "sleepMs":1000, "target":{"text":"...","role":"...","selector":"...","coords":{"x":0,"y":0}}, "shortcut":{"key":"...","modifiers":["command","shift"]}, "menuPath":{"menu":"...","item":"...","subItem":"..."}, "selectorOrCoords":{"x":0,"y":0}}]}',
     'Use Chrome for web requests when a browser is requested.',
+    'Use clickText or clickUi for button or link clicks in browser and app UIs.',
+    'Use runShell with inFocusedTerminal=true for terminal pane commands in editors such as Zed.',
     'Prefer the smallest action sequence that achieves the goal.',
     'If the request cannot be safely executed, return {"summary":"...", "actions":[{"action":"probe"}]}.',
   ].join(' ');
@@ -345,11 +422,35 @@ async function buildControlPlan(promptText, contextText = '') {
 
 async function executeControlPlan(plan) {
   const results = [];
-  for (const action of Array.isArray(plan.actions) ? plan.actions : []) {
-    // Best-effort execution order; each action is logged separately for audit.
+  const executionTrace = [];
+  const actions = Array.isArray(plan.actions) ? plan.actions : [];
+  let finalStatus = actions.length ? 'completed' : 'noop';
+  let failedStep = null;
+
+  for (const [index, action] of actions.entries()) {
+    const startedAt = Date.now();
     const result = await executeAutomationAction(action);
+    const traceEntry = {
+      step: index + 1,
+      action,
+      result,
+      ok: result?.ok !== false,
+      elapsedMs: Date.now() - startedAt,
+      strategyUsed: result?.strategyUsed || result?.mode || '',
+      fallbackUsed: result?.fallbackUsed || '',
+    };
     results.push({ action, result });
+    executionTrace.push(traceEntry);
+    if (result?.ok === false) {
+      finalStatus = 'failed';
+      failedStep = traceEntry;
+      break;
+    }
   }
+
+  results.executionTrace = executionTrace;
+  results.finalStatus = finalStatus;
+  results.failedStep = failedStep;
   return results;
 }
 
@@ -422,6 +523,9 @@ function makeExecutionResponse(requestRecord, plan, executionResults = [], extra
     plan,
     request: requestRecord,
     executionResults,
+    executionTrace: extra.executionTrace || executionResults.executionTrace || [],
+    finalStatus: extra.finalStatus || executionResults.finalStatus || 'completed',
+    failedStep: extra.failedStep || executionResults.failedStep || null,
     executionSummary: summarizeExecutionResults(executionResults),
     ...extra,
   };
@@ -481,11 +585,21 @@ async function executeControlRequest({
     status: 'executed',
     executedAt: now,
     executionResults,
+    executionTrace: executionResults.executionTrace || [],
+    finalStatus: executionResults.finalStatus || 'completed',
+    failedStep: executionResults.failedStep || null,
     executionSummary: summarizeExecutionResults(executionResults),
     executionError: '',
     auth: auth ? { required: auth.required, mode: auth.mode, loopback: auth.loopback, remoteAddress: auth.remoteAddress } : null,
   });
-  return { plan, requestRecord, executionResults };
+  return {
+    plan,
+    requestRecord,
+    executionResults,
+    executionTrace: executionResults.executionTrace || [],
+    finalStatus: executionResults.finalStatus || 'completed',
+    failedStep: executionResults.failedStep || null,
+  };
 }
 
 async function autoExecutePendingRequestsOnBoot() {
@@ -513,6 +627,9 @@ async function autoExecutePendingRequestsOnBoot() {
         executedAt: new Date().toISOString(),
         plan,
         executionResults,
+        executionTrace: executionResults.executionTrace || [],
+        finalStatus: executionResults.finalStatus || 'completed',
+        failedStep: executionResults.failedStep || null,
         executionSummary: summarizeExecutionResults(executionResults),
         executionError: '',
       })).catch(() => null);
@@ -591,6 +708,9 @@ async function approveQueuedRequest(requestId, { request = null, auth = null, bo
     executedAt: new Date().toISOString(),
     plan,
     executionResults,
+    executionTrace: executionResults.executionTrace || [],
+    finalStatus: executionResults.finalStatus || 'completed',
+    failedStep: executionResults.failedStep || null,
     executionSummary: summarizeExecutionResults(executionResults),
     executionError: '',
   }), requestId);
@@ -655,7 +775,7 @@ function normalizeWebhookText(body = {}) {
 }
 
 function looksLikeRemoteControlRequest(text) {
-  return /(?:열어|켜|실행|launch|open|focus|visit|방문|시작|chrome|크롬|cursor|codex|zed|github|설정|권한|permission|privacy|daum|naver|google|youtube|url|https?:\/\/|www\.|[a-z0-9-]+\.(?:com|net|org|io|co\.kr|kr|dev))/i.test(String(text || ''));
+  return /(?:열어|켜|실행|launch|open|focus|visit|방문|시작|클릭|누르|입력|타이핑|검색|엔터|run|chrome|크롬|cursor|codex|zed|github|설정|권한|permission|privacy|daum|naver|google|youtube|blog|블로그|terminal|cmd|zsh|url|https?:\/\/|www\.|[a-z0-9-]+\.(?:com|net|org|io|co\.kr|kr|dev))/i.test(String(text || ''));
 }
 
 function hmacSha256(secret, text) {
@@ -1166,9 +1286,15 @@ const server = http.createServer(async (request, response) => {
         return;
       }
       let executionResults = [];
+      let executionTrace = [];
+      let finalStatus = previewOnly ? 'preview' : 'completed';
+      let failedStep = null;
       let requestRecord = null;
       if (!previewOnly) {
         executionResults = await executeControlPlan(plan);
+        executionTrace = executionResults.executionTrace || [];
+        finalStatus = executionResults.finalStatus || 'completed';
+        failedStep = executionResults.failedStep || null;
         requestRecord = await createQueuedRequest(requestStorePath, {
           kind: 'control',
           source: 'api.control',
@@ -1184,6 +1310,9 @@ const server = http.createServer(async (request, response) => {
           status: 'executed',
           executedAt: new Date().toISOString(),
           executionResults,
+          executionTrace,
+          finalStatus,
+          failedStep,
           executionSummary: summarizeExecutionResults(executionResults),
           executionError: '',
           auth: auth ? { required: auth.required, mode: auth.mode, loopback: auth.loopback, remoteAddress: auth.remoteAddress } : null,
@@ -1197,6 +1326,9 @@ const server = http.createServer(async (request, response) => {
         queued: false,
         approvalRequired: false,
         results: executionResults,
+        executionTrace,
+        finalStatus,
+        failedStep,
         auth,
         request: requestRecord,
       };

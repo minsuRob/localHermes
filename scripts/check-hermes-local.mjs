@@ -30,6 +30,23 @@ function info(message) {
   console.log(`  [INFO] ${message}`);
 }
 
+function actionSequence(actions = []) {
+  return actions.map((action) => String(action?.action || '').trim());
+}
+
+function expectActionSequence(name, actions, expected) {
+  const actual = actionSequence(actions);
+  let cursor = 0;
+  for (const expectedAction of expected) {
+    const index = actual.indexOf(expectedAction, cursor);
+    if (index === -1) {
+      throw new Error(`${name}: expected actions ${expected.join(' -> ')} but got ${actual.join(' -> ') || '(empty)'}`);
+    }
+    cursor = index + 1;
+  }
+  pass(`${name}: ${actual.join(' -> ')}`);
+}
+
 async function exists(targetPath) {
   try {
     await stat(targetPath);
@@ -221,30 +238,50 @@ async function checkProxy() {
     pass('요청 큐 API 응답');
   }
 
-  const controlResponse = await fetch(`${proxyUrl}/api/control`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...createClientAuthHeaders({
-        token: process.env.OPENHERMES_API_TOKEN || '',
-        secret: process.env.OPENHERMES_API_SECRET || '',
-        method: 'POST',
-        pathname: '/api/control',
-        body: {
-          task: 'Chrome으로 daum.net 열어줘',
-          execute: false,
-        },
-      }),
+  const scenarios = [
+    {
+      name: 'Control preview - Naver blog click',
+      task: '크롬으로 네이버 메인 창을켜셔, 마우스로 블로그 버튼을 클릭해.',
+      expected: ['launch', 'openUrl', 'waitFor', 'clickText'],
     },
-    body: JSON.stringify({
-      task: 'Chrome으로 daum.net 열어줘',
-      execute: false,
-    }),
-  }).catch(() => null);
-  if (controlResponse && controlResponse.ok) {
+    {
+      name: 'Control preview - Zed shell command',
+      task: 'Zed에서, "printing-landing — zsh" 적힌 cmd 창에서, 현재 폴더 리스트를 조회하는 명령어를 실행',
+      expected: ['launch', 'focus', 'waitFor', 'runShell'],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const controlResponse = await fetch(`${proxyUrl}/api/control`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...createClientAuthHeaders({
+          token: process.env.OPENHERMES_API_TOKEN || '',
+          secret: process.env.OPENHERMES_API_SECRET || '',
+          method: 'POST',
+          pathname: '/api/control',
+          body: {
+            task: scenario.task,
+            execute: false,
+          },
+        }),
+      },
+      body: JSON.stringify({
+        task: scenario.task,
+        execute: false,
+      }),
+    }).catch(() => null);
+    if (!controlResponse || !controlResponse.ok) {
+      throw new Error(`${scenario.name}: control preview request failed`);
+    }
     const control = await controlResponse.json().catch(() => null);
-    if (control?.plan?.actions?.length) {
-      pass(`Control preview 응답: ${control.plan.actions.length} action(s)`);
+    if (!control?.plan?.actions?.length) {
+      throw new Error(`${scenario.name}: plan actions missing`);
+    }
+    expectActionSequence(scenario.name, control.plan.actions, scenario.expected);
+    if (control.finalStatus && control.finalStatus !== 'preview') {
+      info(`${scenario.name}: finalStatus=${control.finalStatus}`);
     }
   }
 }

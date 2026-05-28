@@ -59,6 +59,18 @@ function formatTime(iso) {
   }
 }
 
+function describeControlAction(action = {}) {
+  const name = String(action.action || 'action');
+  const app = action.app ? ` @ ${action.app}` : '';
+  if (name === 'openUrl') return `${name}${app} ${action.url || ''}`.trim();
+  if (name === 'clickText') return `${name}${app} "${action.text || ''}"`.trim();
+  if (name === 'runShell') return `${name}${app} ${action.command || ''}`.trim();
+  if (name === 'waitFor') return `${name} ${Number(action.timeoutMs || action.sleepMs || 0)}ms`.trim();
+  if (name === 'type') return `${name}${app} "${action.text || ''}"`.trim();
+  if (name === 'shortcut') return `${name}${app} ${action.shortcut?.key || action.key || ''}`.trim();
+  return `${name}${app}`.trim();
+}
+
 function normalizeBaseUrl(value) {
   if (!value) return '';
   return value.replace(/\/+$/, '');
@@ -67,7 +79,7 @@ function normalizeBaseUrl(value) {
 function looksLikeComputerUsePrompt(text) {
   const lower = String(text || '').toLowerCase();
   const hasAppIntent =
-    /(?:열어|켜|실행|launch|open|focus|visit|방문|시작)/i.test(lower) ||
+    /(?:열어|켜|실행|launch|open|focus|visit|방문|시작|클릭|누르|입력|타이핑|검색|엔터|enter|run|명령)/i.test(lower) ||
     lower.includes('app') ||
     lower.includes('어플') ||
     lower.includes('어플리케이션');
@@ -85,6 +97,11 @@ function looksLikeComputerUsePrompt(text) {
     lower.includes('naver') ||
     lower.includes('google') ||
     lower.includes('youtube') ||
+    lower.includes('blog') ||
+    lower.includes('블로그') ||
+    lower.includes('terminal') ||
+    lower.includes('cmd') ||
+    lower.includes('zsh') ||
     lower.includes('url') ||
     /(?:https?:\/\/|www\.|[a-z0-9-]+\.(?:com|net|org|io|co\.kr|kr|dev))/i.test(lower) ||
     /^https?:\/\//i.test(lower);
@@ -480,7 +497,12 @@ export default function App() {
         const summary = response?.summary || '컴퓨터 제어를 실행했습니다.';
         const content = response?.queued
           ? `${summary}\n\n실행 대기 중입니다.\nrequestId: ${response?.request?.id || response?.requestId || 'unknown'}\n${JSON.stringify(response?.request || response, null, 2)}`
-          : `${summary}\n\n${JSON.stringify(response?.plan || response, null, 2)}`;
+          : `${summary}\n\n${JSON.stringify({
+              plan: response?.plan,
+              finalStatus: response?.finalStatus,
+              failedStep: response?.failedStep,
+              executionTrace: response?.executionTrace,
+            }, null, 2)}`;
         updateActiveSession((session) => ({
           ...session,
           updatedAt: new Date().toISOString(),
@@ -764,6 +786,7 @@ export default function App() {
                           {request.requestId || request.id}
                           {request.plan?.actions?.length ? ` · ${request.plan.actions.length} actions` : ''}
                           {request.executionSummary ? ` · ${request.executionSummary}` : ''}
+                          {request.finalStatus ? ` · ${request.finalStatus}` : ''}
                         </div>
                       </article>
                     );
@@ -797,12 +820,18 @@ export default function App() {
                     <button type="submit" className="railButton" disabled={computerSending}>
                       {computerSending ? '실행 중...' : '실행'}
                     </button>
-                    <button type="button" className="railButton" onClick={() => setComputerPrompt('Chrome으로 daum.net 열어줘')}>
-                      Daum 예시
-                    </button>
-                    <button type="button" className="railButton" onClick={() => setComputerPrompt('Cursor를 열어줘')}>
-                      Cursor 예시
-                    </button>
+                  <button type="button" className="railButton" onClick={() => setComputerPrompt('Chrome으로 daum.net 열어줘')}>
+                    Daum 예시
+                  </button>
+                  <button type="button" className="railButton" onClick={() => setComputerPrompt('크롬으로 네이버 메인 창을켜셔, 마우스로 블로그 버튼을 클릭해.')}>
+                    Naver 블로그
+                  </button>
+                  <button type="button" className="railButton" onClick={() => setComputerPrompt('Zed에서, "printing-landing — zsh" 적힌 cmd 창에서, 현재 폴더 리스트를 조회하는 명령어를 실행')}>
+                    Zed 터미널
+                  </button>
+                  <button type="button" className="railButton" onClick={() => setComputerPrompt('Cursor를 열어줘')}>
+                    Cursor 예시
+                  </button>
                     <button type="button" className="railButton" onClick={() => setComputerPrompt('시스템 Automation 권한 창을 열어줘')}>
                       권한 창
                     </button>
@@ -815,6 +844,27 @@ export default function App() {
                       ? (computerResult.summary || computerResult.error || JSON.stringify(computerResult.plan || computerResult).slice(0, 240))
                       : '아직 실행한 프롬프트가 없습니다.'}
                   </div>
+                  {computerResult?.finalStatus && (
+                    <div className="actionMeta">status: {computerResult.finalStatus}{computerResult.failedStep ? ` · failed step ${computerResult.failedStep.step}` : ''}</div>
+                  )}
+                  {Array.isArray(computerResult?.executionTrace) && computerResult.executionTrace.length > 0 && (
+                    <div className="traceList">
+                      {computerResult.executionTrace.map((entry) => (
+                        <div key={`${entry.step}-${describeControlAction(entry.action)}`} className={`traceItem ${entry.ok ? 'ok' : 'fail'}`}>
+                          <div className="traceTop">
+                            <span>Step {entry.step}</span>
+                            <span>{entry.ok ? 'ok' : 'fail'}</span>
+                          </div>
+                          <div className="traceAction">{describeControlAction(entry.action)}</div>
+                          <div className="traceMeta">
+                            {entry.strategyUsed ? `strategy=${entry.strategyUsed}` : ''}
+                            {entry.fallbackUsed ? ` · fallback=${entry.fallbackUsed}` : ''}
+                            {Number.isFinite(entry.elapsedMs) ? ` · ${entry.elapsedMs}ms` : ''}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </section>
 
