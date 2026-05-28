@@ -77,6 +77,18 @@ function normalizeBaseUrl(value) {
   return value.replace(/\/+$/, '');
 }
 
+function normalizeProxyInput(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) {
+    return normalizeBaseUrl(trimmed);
+  }
+  if (/^\/\//.test(trimmed)) {
+    return normalizeBaseUrl(`https:${trimmed}`);
+  }
+  return normalizeBaseUrl(`https://${trimmed}`);
+}
+
 function isPublicBrowser() {
   if (typeof window === 'undefined') return false;
   return !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
@@ -228,10 +240,23 @@ export default function App() {
     return localStorage.getItem(STORAGE_KEYS.activeSessionId) || initialSessions[0].id;
   });
   const [draft, setDraft] = useState('');
+  const [proxyDraft, setProxyDraft] = useState(() => {
+    const configUrl = import.meta.env.VITE_PROXY_URL || window.__OPENHERMES_CONFIG__?.proxyUrl || '';
+    const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
+    const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
+    if (isPublicBrowser()) {
+      return storedSource === 'manual' && storedUrl && !isPrivateProxyUrl(storedUrl) ? storedUrl : '';
+    }
+    return normalizeBaseUrl(storedUrl || configUrl || 'http://127.0.0.1:8787');
+  });
   const [proxyUrl, setProxyUrl] = useState(() => {
     const configUrl = import.meta.env.VITE_PROXY_URL || window.__OPENHERMES_CONFIG__?.proxyUrl || '';
     if (isPublicBrowser()) {
-      return '';
+      const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
+      const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
+      return storedSource === 'manual' && storedUrl && !isPrivateProxyUrl(storedUrl)
+        ? normalizeBaseUrl(storedUrl)
+        : '';
     }
     const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
     return normalizeBaseUrl(storedUrl || configUrl || 'http://127.0.0.1:8787');
@@ -259,6 +284,9 @@ export default function App() {
   }, [activeSessionId, sessions]);
 
   async function apiRequest(pathname, { method = 'GET', body } = {}) {
+    if (!proxyUrl) {
+      throw new Error('프록시 URL을 먼저 적용해 주세요');
+    }
     const requestBody = body === undefined ? undefined : JSON.stringify(body);
     const bodyForAuth = method === 'GET' ? '' : (body === undefined ? '' : body);
     const headers = {
@@ -330,6 +358,36 @@ export default function App() {
     }
   }
 
+  function applyProxyDraft() {
+    const next = normalizeProxyInput(proxyDraft);
+    if (!next) {
+      setProxyDraft('');
+      setProxyUrl('');
+      localStorage.removeItem(STORAGE_KEYS.proxyUrl);
+      localStorage.removeItem(STORAGE_KEYS.proxyUrlSource);
+      setActionStatus('프록시를 해제했습니다');
+      return;
+    }
+
+    if (isPublicBrowser() && isPrivateProxyUrl(next)) {
+      setActionStatus('공개 Pages에서는 공개 Proxy URL만 적용할 수 있습니다');
+      return;
+    }
+
+    try {
+      new URL(next);
+    } catch {
+      setActionStatus('유효한 http(s) Proxy URL을 입력해 주세요');
+      return;
+    }
+
+    localStorage.setItem(STORAGE_KEYS.proxyUrlSource, 'manual');
+    localStorage.setItem(STORAGE_KEYS.proxyUrl, next);
+    setProxyDraft(next);
+    setProxyUrl(next);
+    setActionStatus(`프록시 적용: ${next}`);
+  }
+
   async function runAutomation(action, extra = {}) {
     setActionStatus(`실행 중: ${action} ${extra.app || ''}`.trim());
     try {
@@ -387,13 +445,22 @@ export default function App() {
 
   useEffect(() => {
     if (isPublicBrowser()) {
-      localStorage.removeItem(STORAGE_KEYS.proxyUrl);
-      localStorage.removeItem(STORAGE_KEYS.proxyUrlSource);
+      const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
+      const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
+      if (storedSource !== 'manual' || !storedUrl || isPrivateProxyUrl(storedUrl)) {
+        localStorage.removeItem(STORAGE_KEYS.proxyUrl);
+        localStorage.removeItem(STORAGE_KEYS.proxyUrlSource);
+        setProxyDraft('');
+      }
     }
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.proxyUrl, proxyUrl);
+    if (proxyUrl) {
+      localStorage.setItem(STORAGE_KEYS.proxyUrl, proxyUrl);
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.proxyUrl);
+    }
   }, [proxyUrl]);
   
   useEffect(() => {
@@ -1006,14 +1073,39 @@ export default function App() {
             <label className="fieldLabel">
               Proxy URL
               <input
-                value={proxyUrl}
-                onChange={(event) => {
-                  localStorage.setItem(STORAGE_KEYS.proxyUrlSource, 'manual');
-                  setProxyUrl(normalizeBaseUrl(event.target.value));
+                value={proxyDraft}
+                onChange={(event) => setProxyDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    applyProxyDraft();
+                  }
                 }}
                 placeholder={isPublicBrowser() ? 'https://<public proxy url>' : 'http://127.0.0.1:8787'}
               />
             </label>
+            <div className="queueActions">
+              <button type="button" className="ghostButton" onClick={applyProxyDraft}>
+                적용
+              </button>
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => {
+                  setProxyDraft('');
+                  setProxyUrl('');
+                  localStorage.removeItem(STORAGE_KEYS.proxyUrl);
+                  localStorage.removeItem(STORAGE_KEYS.proxyUrlSource);
+                  setActionStatus('프록시 입력을 지웠습니다');
+                }}
+              >
+                비우기
+              </button>
+            </div>
+            <div className="actionCard">
+              <div className="actionTitle">현재 적용됨</div>
+              <div className="actionDesc">{proxyUrl || '아직 적용된 Proxy URL이 없습니다.'}</div>
+            </div>
             <label className="fieldLabel">
               API Token
               <input value={apiToken} onChange={(event) => setApiToken(event.target.value)} placeholder="선택" />
