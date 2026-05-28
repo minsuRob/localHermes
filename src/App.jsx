@@ -98,6 +98,12 @@ function isPrivateProxyUrl(value) {
   return /^(https?:\/\/)?(127\.0\.0\.1|localhost|[^/]+\.ts\.net)(:\d+)?(\/|$)/i.test(String(value || '').trim());
 }
 
+function getQueryProxyUrl() {
+  if (typeof window === 'undefined') return '';
+  const params = new URLSearchParams(window.location.search);
+  return normalizeProxyInput(params.get('proxy') || '');
+}
+
 function looksLikeComputerUsePrompt(text) {
   const lower = String(text || '').toLowerCase();
   const hasAppIntent =
@@ -240,8 +246,12 @@ export default function App() {
     return localStorage.getItem(STORAGE_KEYS.activeSessionId) || initialSessions[0].id;
   });
   const [draft, setDraft] = useState('');
+  const initialProxyUrl = getQueryProxyUrl();
   const [proxyDraft, setProxyDraft] = useState(() => {
     const configUrl = import.meta.env.VITE_PROXY_URL || window.__OPENHERMES_CONFIG__?.proxyUrl || '';
+    if (initialProxyUrl) {
+      return initialProxyUrl;
+    }
     const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
     const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
     if (isPublicBrowser()) {
@@ -251,6 +261,9 @@ export default function App() {
   });
   const [proxyUrl, setProxyUrl] = useState(() => {
     const configUrl = import.meta.env.VITE_PROXY_URL || window.__OPENHERMES_CONFIG__?.proxyUrl || '';
+    if (initialProxyUrl) {
+      return initialProxyUrl;
+    }
     if (isPublicBrowser()) {
       const storedUrl = localStorage.getItem(STORAGE_KEYS.proxyUrl) || '';
       const storedSource = localStorage.getItem(STORAGE_KEYS.proxyUrlSource) || '';
