@@ -464,6 +464,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!initialProxyUrl) return;
+    if (isPublicBrowser()) {
+      localStorage.setItem(STORAGE_KEYS.proxyUrlSource, 'manual');
+      localStorage.setItem(STORAGE_KEYS.proxyUrl, initialProxyUrl);
+    }
+    setProxyDraft(initialProxyUrl);
+    setProxyUrl(initialProxyUrl);
+  }, [initialProxyUrl]);
+
+  useEffect(() => {
     if (proxyUrl) {
       localStorage.setItem(STORAGE_KEYS.proxyUrl, proxyUrl);
     } else {
