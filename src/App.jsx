@@ -410,10 +410,16 @@ function getQueryProxyUrl() {
 function looksLikeComputerUsePrompt(text) {
   const lower = String(text || '').toLowerCase();
   const hasAppIntent =
-    /(?:열어|켜|실행|launch|open|focus|visit|방문|시작|클릭|누르|입력|타이핑|검색|엔터|enter|run|명령)/i.test(lower) ||
+    /(?:열어|열고|켜|켜고|실행|실행해|실행하고|launch|open|focus|visit|방문|시작|클릭|누르|입력|타이핑|검색|엔터|enter|run|명령|찾아|찾아서|찾기)/i.test(lower) ||
     lower.includes('app') ||
     lower.includes('어플') ||
-    lower.includes('어플리케이션');
+    lower.includes('어플리케이션') ||
+    lower.includes('terminal') ||
+    lower.includes('터미널') ||
+    lower.includes('shell') ||
+    lower.includes('cmd') ||
+    lower.includes('zsh') ||
+    lower.includes('bash');
   const mentionsControlTargets =
     lower.includes('chrome') ||
     lower.includes('크롬') ||
@@ -436,7 +442,8 @@ function looksLikeComputerUsePrompt(text) {
     lower.includes('url') ||
     /(?:https?:\/\/|www\.|[a-z0-9-]+\.(?:com|net|org|io|co\.kr|kr|dev))/i.test(lower) ||
     /^https?:\/\//i.test(lower);
-  return hasAppIntent && mentionsControlTargets;
+  const mentionsActionableWork = /(?:ls\b|pwd\b|cd\b|git\b|open\b|열어|열고|켜고|찾아|찾아서|클릭|누르|입력|타이핑|검색|실행|run\b)/i.test(lower);
+  return (hasAppIntent && mentionsControlTargets) || (mentionsControlTargets && mentionsActionableWork);
 }
 
 function textEncoder() {

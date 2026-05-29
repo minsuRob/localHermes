@@ -250,6 +250,11 @@ async function checkProxy() {
       execute: true,
       expected: ['launch', 'focus', 'waitFor', 'clickUi', 'waitFor', 'clickUi', 'runShell', 'verify'],
     },
+    {
+      name: 'Control preview - Cursor terminal command',
+      task: 'cursor 앱 열고 terminal을 찾아서 ls를 쳐.',
+      expected: ['launch', 'focus', 'waitFor', 'shortcut', 'waitFor', 'runShell', 'verify'],
+    },
   ];
 
   for (const scenario of scenarios) {

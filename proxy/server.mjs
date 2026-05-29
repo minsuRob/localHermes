@@ -325,6 +325,7 @@ function inferControlActionsFromPrompt(promptText = '', contextText = '') {
   const wantsZed = containsAny(lower, [/zed/i, /제드/i]);
   const wantsCursor = /cursor/i.test(lower);
   const wantsCodex = /codex/i.test(lower);
+  const wantsEditorShell = wantsZed || wantsCursor || wantsCodex;
   const wantsSystemPane = containsAny(lower, [/권한/i, /permission/i, /privacy/i, /설정/i, /system settings/i, /automation/i, /accessibility/i]);
   const wantsClick = containsAny(lower, [/클릭/i, /눌러/i, /press/i, /click/i, /tap/i, /마우스/i, /버튼/i]);
   const wantsTyping = containsAny(lower, [/입력/i, /type/i, /검색/i, /search/i, /write/i, /타이핑/i, /엔터/i, /enter/i]);
@@ -363,46 +364,64 @@ function inferControlActionsFromPrompt(promptText = '', contextText = '') {
     }
   }
 
-  if (wantsZed) {
-    actions.push({ action: 'launch', app: 'Zed' });
-    actions.push({ action: 'focus', app: 'Zed' });
+  if (wantsEditorShell) {
+    const editorApp = wantsCursor ? 'Cursor' : wantsCodex ? 'Codex' : 'Zed';
+    actions.push({ action: 'launch', app: editorApp });
+    actions.push({ action: 'focus', app: editorApp });
     actions.push({
       action: 'waitFor',
       timeoutMs: 2500,
       sleepMs: 250,
-      condition: { type: 'frontmostApp', app: 'Zed' },
+      condition: { type: 'frontmostApp', app: editorApp },
     });
-    if (wantsPlusButton || wantsShell) {
-      actions.push({
-        action: 'clickUi',
-        app: 'Zed',
-        target: {
-          text: '+',
-          role: 'button',
-          strategy: 'ax',
-        },
-      });
-      actions.push({
-        action: 'waitFor',
-        timeoutMs: 2000,
-        sleepMs: 250,
-        condition: { type: 'screenTextContains', text: 'zsh' },
-      });
-      actions.push({
-        action: 'clickUi',
-        app: 'Zed',
-        target: {
-          text: 'zsh',
-          role: 'button',
-          strategy: 'ax',
-        },
-      });
+    if (wantsShell) {
+      if (editorApp === 'Zed' && wantsPlusButton) {
+        actions.push({
+          action: 'clickUi',
+          app: 'Zed',
+          target: {
+            text: '+',
+            role: 'button',
+            strategy: 'ax',
+          },
+        });
+        actions.push({
+          action: 'waitFor',
+          timeoutMs: 2000,
+          sleepMs: 250,
+          condition: { type: 'screenTextContains', text: 'zsh' },
+        });
+        actions.push({
+          action: 'clickUi',
+          app: 'Zed',
+          target: {
+            text: 'zsh',
+            role: 'button',
+            strategy: 'ax',
+          },
+        });
+      } else {
+        actions.push({
+          action: 'shortcut',
+          app: editorApp,
+          shortcut: {
+            key: '`',
+            modifiers: ['control'],
+          },
+        });
+        actions.push({
+          action: 'waitFor',
+          timeoutMs: 2000,
+          sleepMs: 250,
+          condition: { type: 'screenTextContains', text: 'terminal' },
+        });
+      }
     }
-    if (wantsShell && wantsFolderListing) {
+    if (wantsFolderListing) {
       const command = containsAny(lower, [/pwd/i]) ? 'pwd && ls -la' : 'ls -la';
       actions.push({
         action: 'runShell',
-        app: 'Zed',
+        app: editorApp,
         command,
         inFocusedTerminal: true,
       });
@@ -414,11 +433,11 @@ function inferControlActionsFromPrompt(promptText = '', contextText = '') {
     }
   }
 
-  if (wantsCursor) {
+  if (wantsCursor && !wantsEditorShell) {
     actions.push({ action: 'launch', app: 'Cursor' });
   }
 
-  if (wantsCodex) {
+  if (wantsCodex && !wantsEditorShell) {
     actions.push({ action: 'launch', app: 'Codex' });
   }
 
