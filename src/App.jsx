@@ -637,14 +637,16 @@ export default function App() {
           },
         });
         const summary = response?.summary || '컴퓨터 제어를 실행했습니다.';
-        const content = response?.queued
-          ? `${summary}\n\n실행 대기 중입니다.\nrequestId: ${response?.request?.id || response?.requestId || 'unknown'}\n${JSON.stringify(response?.request || response, null, 2)}`
-          : `${summary}\n\n${JSON.stringify({
-              plan: response?.plan,
-              finalStatus: response?.finalStatus,
-              failedStep: response?.failedStep,
-              executionTrace: response?.executionTrace,
-            }, null, 2)}`;
+        const statusLine = response?.queued
+          ? '실행 대기 중입니다.'
+          : `상태: ${response?.finalStatus || 'completed'}`;
+        const extraLine = response?.repairRounds
+          ? `보정 횟수: ${response.repairRounds}`
+          : '';
+        const requestLine = response?.queued
+          ? `요청 ID: ${response?.request?.id || response?.requestId || 'unknown'}`
+          : '';
+        const content = [summary, statusLine, extraLine, requestLine].filter(Boolean).join('\n');
         updateActiveSession((session) => ({
           ...session,
           updatedAt: new Date().toISOString(),
