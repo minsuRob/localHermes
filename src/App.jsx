@@ -81,31 +81,14 @@ function describeControlAction(action = {}) {
 function summarizeResultPayload(result) {
   if (!result) return '아직 실행한 프롬프트가 없습니다.';
   if (result.error) return String(result.error);
-  if (result.summary) return String(result.summary);
+  if (result.summary) return `${String(result.summary)}를 내부적으로 실행했습니다.`;
   if (result.finalStatus) {
     const bits = [`status=${result.finalStatus}`];
     if (result.repairRounds) bits.push(`repairs=${result.repairRounds}`);
     if (result.failedStep?.step) bits.push(`failedStep=${result.failedStep.step}`);
-    return bits.join(' · ');
+    return `${bits.join(' · ')} 상태로 처리했습니다.`;
   }
-  return JSON.stringify(result).slice(0, 240);
-}
-
-function summarizeRawResult(result) {
-  if (!result) return '';
-  const snapshot = {
-    summary: result.summary || '',
-    finalStatus: result.finalStatus || '',
-    repairRounds: result.repairRounds || 0,
-    failedStep: result.failedStep?.step || '',
-    results: Array.isArray(result.results) ? result.results.slice(0, 3).map((entry) => ({
-      action: entry?.action?.action || '',
-      ok: entry?.result?.ok !== false,
-      observedText: entry?.result?.observedText || '',
-      screenshot: Boolean(entry?.result?.screenshot?.dataUrl || entry?.result?.screenshot?.path),
-    })) : [],
-  };
-  return JSON.stringify(snapshot, null, 2);
+  return '실행이 완료되었습니다.';
 }
 
 function getLatestComputerTrace(result) {
@@ -1004,7 +987,7 @@ export default function App() {
                       <div className="messageText">{computerPrompt || '프롬프트 없음'}</div>
                     </div>
                     <div className="messageBubble assistantBubble">
-                      <div className="messageLabel">API result</div>
+                      <div className="messageLabel">Result</div>
                       <div className="messageText">{summarizeResultPayload(computerResult)}</div>
                       <div className="messageMeta">
                         {computerResult?.finalStatus ? `status=${computerResult.finalStatus}` : ''}
@@ -1031,12 +1014,6 @@ export default function App() {
                         alt="computer use capture preview"
                       />
                     </div>
-                  )}
-                  {computerResult?.results?.length > 0 && (
-                    <details className="rawResultDetails">
-                      <summary>Raw API result</summary>
-                      <pre>{summarizeRawResult(computerResult)}</pre>
-                    </details>
                   )}
                   {Array.isArray(computerResult?.executionTrace) && computerResult.executionTrace.length > 0 && (
                     <div className="traceList">
