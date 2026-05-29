@@ -695,6 +695,89 @@ input {
   font-size: 0.8rem;
 }
 
+.messageThread {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+
+.messageBubble {
+  max-width: 100%;
+  padding: 0.82rem 0.9rem;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+}
+
+.userBubble {
+  margin-left: auto;
+  background: linear-gradient(135deg, rgba(79, 163, 255, 0.22), rgba(79, 163, 255, 0.08));
+  border-color: rgba(79, 163, 255, 0.22);
+}
+
+.assistantBubble {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.messageLabel {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.35rem;
+}
+
+.messageText {
+  color: var(--text);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.messageMeta {
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.capturePreview {
+  margin-top: 0.9rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.captureImage {
+  width: 100%;
+  max-height: 240px;
+  object-fit: cover;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.rawResultDetails {
+  margin-top: 0.8rem;
+  color: var(--muted);
+}
+
+.rawResultDetails summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.rawResultDetails pre {
+  margin: 0.55rem 0 0;
+  padding: 0.8rem;
+  border-radius: 14px;
+  overflow: auto;
+  max-height: 220px;
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 .traceList {
   display: grid;
   gap: 0.55rem;

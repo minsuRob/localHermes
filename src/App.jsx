@@ -78,6 +78,43 @@ function describeControlAction(action = {}) {
   return `${name}${app}`.trim();
 }
 
+function summarizeResultPayload(result) {
+  if (!result) return '아직 실행한 프롬프트가 없습니다.';
+  if (result.error) return String(result.error);
+  if (result.summary) return String(result.summary);
+  if (result.finalStatus) {
+    const bits = [`status=${result.finalStatus}`];
+    if (result.repairRounds) bits.push(`repairs=${result.repairRounds}`);
+    if (result.failedStep?.step) bits.push(`failedStep=${result.failedStep.step}`);
+    return bits.join(' · ');
+  }
+  return JSON.stringify(result).slice(0, 240);
+}
+
+function summarizeRawResult(result) {
+  if (!result) return '';
+  const snapshot = {
+    summary: result.summary || '',
+    finalStatus: result.finalStatus || '',
+    repairRounds: result.repairRounds || 0,
+    failedStep: result.failedStep?.step || '',
+    results: Array.isArray(result.results) ? result.results.slice(0, 3).map((entry) => ({
+      action: entry?.action?.action || '',
+      ok: entry?.result?.ok !== false,
+      observedText: entry?.result?.observedText || '',
+      screenshot: Boolean(entry?.result?.screenshot?.dataUrl || entry?.result?.screenshot?.path),
+    })) : [],
+  };
+  return JSON.stringify(snapshot, null, 2);
+}
+
+function getLatestComputerTrace(result) {
+  if (!Array.isArray(result?.executionTrace) || result.executionTrace.length === 0) {
+    return null;
+  }
+  return result.executionTrace[result.executionTrace.length - 1] || null;
+}
+
 function normalizeBaseUrl(value) {
   if (!value) return '';
   return value.replace(/\/+$/, '');
@@ -961,10 +998,20 @@ export default function App() {
                 </form>
                 <div className="actionCard">
                   <div className="actionTitle">실행 결과</div>
-                  <div className="actionDesc">
-                    {computerResult
-                      ? (computerResult.summary || computerResult.error || JSON.stringify(computerResult.plan || computerResult).slice(0, 240))
-                      : '아직 실행한 프롬프트가 없습니다.'}
+                  <div className="messageThread">
+                    <div className="messageBubble userBubble">
+                      <div className="messageLabel">Prompt</div>
+                      <div className="messageText">{computerPrompt || '프롬프트 없음'}</div>
+                    </div>
+                    <div className="messageBubble assistantBubble">
+                      <div className="messageLabel">API result</div>
+                      <div className="messageText">{summarizeResultPayload(computerResult)}</div>
+                      <div className="messageMeta">
+                        {computerResult?.finalStatus ? `status=${computerResult.finalStatus}` : ''}
+                        {computerResult?.repairRounds ? ` · repairs=${computerResult.repairRounds}` : ''}
+                        {computerResult?.failedStep?.step ? ` · failedStep=${computerResult.failedStep.step}` : ''}
+                      </div>
+                    </div>
                   </div>
                   {computerResult?.finalStatus && (
                     <div className="actionMeta">
@@ -972,6 +1019,24 @@ export default function App() {
                       {computerResult.repairRounds ? ` · repairs ${computerResult.repairRounds}` : ''}
                       {computerResult.failedStep ? ` · failed step ${computerResult.failedStep.step}` : ''}
                     </div>
+                  )}
+                  {getLatestComputerTrace(computerResult)?.result?.screenshot?.dataUrl && (
+                    <div className="capturePreview">
+                      <div className="actionMeta">
+                        capture: visible · {getLatestComputerTrace(computerResult)?.result?.screenshot?.path?.split('/').pop() || 'screen.png'}
+                      </div>
+                      <img
+                        className="captureImage"
+                        src={getLatestComputerTrace(computerResult).result.screenshot.dataUrl}
+                        alt="computer use capture preview"
+                      />
+                    </div>
+                  )}
+                  {computerResult?.results?.length > 0 && (
+                    <details className="rawResultDetails">
+                      <summary>Raw API result</summary>
+                      <pre>{summarizeRawResult(computerResult)}</pre>
+                    </details>
                   )}
                   {Array.isArray(computerResult?.executionTrace) && computerResult.executionTrace.length > 0 && (
                     <div className="traceList">
