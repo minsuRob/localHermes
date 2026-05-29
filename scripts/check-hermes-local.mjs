@@ -247,7 +247,8 @@ async function checkProxy() {
     {
       name: 'Control preview - Zed shell command',
       task: 'Zed에서, "printing-landing — zsh" 적힌 cmd 창의 + 버튼을 눌러서 현재 폴더 리스트를 조회하는 명령어를 실행하고, 결과를 검증해.',
-      expected: ['launch', 'focus', 'waitFor', 'clickUi', 'waitFor', 'runShell', 'verify'],
+      execute: true,
+      expected: ['launch', 'focus', 'waitFor', 'clickUi', 'waitFor', 'clickUi', 'runShell', 'verify'],
     },
   ];
 
@@ -269,7 +270,7 @@ async function checkProxy() {
       },
       body: JSON.stringify({
         task: scenario.task,
-        execute: false,
+        execute: scenario.execute === true ? true : false,
       }),
     }).catch(() => null);
     if (!controlResponse || !controlResponse.ok) {
@@ -280,6 +281,23 @@ async function checkProxy() {
       throw new Error(`${scenario.name}: plan actions missing`);
     }
     expectActionSequence(scenario.name, control.plan.actions, scenario.expected);
+    if (!control?.evidence || !Array.isArray(control.evidence.executionTrace)) {
+      throw new Error(`${scenario.name}: evidence.executionTrace missing`);
+    }
+    if (scenario.execute === true) {
+      if (!control.evidence.executionTrace.length) {
+        throw new Error(`${scenario.name}: expected execution trace in evidence`);
+      }
+      if (!Array.isArray(control.evidence.captures)) {
+        throw new Error(`${scenario.name}: evidence.captures missing`);
+      }
+      if (!control.evidence.terminal) {
+        throw new Error(`${scenario.name}: evidence.terminal missing`);
+      }
+      if (!control.evidence.verify) {
+        throw new Error(`${scenario.name}: evidence.verify missing`);
+      }
+    }
     if (scenario.name.includes('Zed')) {
       const verifyAction = control.plan.actions.find((action) => action.action === 'verify');
       if (!verifyAction || verifyAction.type !== 'terminalOutputVisible') {

@@ -388,6 +388,15 @@ function inferControlActionsFromPrompt(promptText = '', contextText = '') {
         sleepMs: 250,
         condition: { type: 'screenTextContains', text: 'zsh' },
       });
+      actions.push({
+        action: 'clickUi',
+        app: 'Zed',
+        target: {
+          text: 'zsh',
+          role: 'button',
+          strategy: 'ax',
+        },
+      });
     }
     if (wantsShell && wantsFolderListing) {
       const command = containsAny(lower, [/pwd/i]) ? 'pwd && ls -la' : 'ls -la';
@@ -471,6 +480,95 @@ function serializeTraceForPlanner(executionTrace = []) {
       fallbackUsed: entry.fallbackUsed || '',
     },
   }));
+}
+
+function buildControlEvidence({
+  plan = {},
+  requestRecord = null,
+  executionResults = null,
+  executionTrace = [],
+  finalStatus = '',
+  failedStep = null,
+  repairRounds = 0,
+  queued = false,
+} = {}) {
+  const trace = Array.isArray(executionTrace) && executionTrace.length
+    ? executionTrace
+    : Array.isArray(executionResults?.executionTrace)
+      ? executionResults.executionTrace
+      : [];
+
+  const captures = trace.flatMap((entry) => {
+    const screenshot = entry?.result?.screenshot;
+    if (!screenshot) return [];
+    return [{
+      step: entry.step,
+      round: entry.round,
+      ok: entry.ok,
+      action: entry.action ? { ...entry.action } : entry.action,
+      elapsedMs: entry.elapsedMs,
+      strategyUsed: entry.strategyUsed || '',
+      fallbackUsed: entry.fallbackUsed || '',
+      observedText: entry.result?.observedText || '',
+      screenshot: { ...screenshot },
+      ocr: entry.result?.ocr ? { ...entry.result.ocr } : null,
+    }];
+  });
+
+  const terminalTrace = [...trace].reverse().find((entry) => {
+    const actionName = String(entry?.action?.action || '').toLowerCase();
+    const verifyType = String(entry?.action?.type || entry?.action?.verify || '').toLowerCase();
+    return actionName === 'runshell' || (actionName === 'verify' && ['terminaloutputvisible', 'terminalvisible', 'shellvisible'].includes(verifyType));
+  }) || [...trace].reverse().find((entry) => {
+    const stdout = String(entry?.result?.stdout || '').trim();
+    const stderr = String(entry?.result?.stderr || '').trim();
+    const observedText = String(entry?.result?.observedText || '').trim();
+    return Boolean(stdout || stderr || observedText);
+  }) || null;
+
+  const verifyTrace = [...trace].reverse().find((entry) => String(entry?.action?.action || '').toLowerCase() === 'verify') || terminalTrace;
+
+  return {
+    summary: plan?.summary || requestRecord?.summary || '',
+    finalStatus: finalStatus || executionResults?.finalStatus || (queued ? 'queued' : 'completed'),
+    repairRounds: Number(repairRounds || executionResults?.repairRounds || 0),
+    failedStep: failedStep || executionResults?.failedStep || null,
+    requestId: requestRecord?.id || requestRecord?.requestId || '',
+    queued: Boolean(queued),
+    executionTrace: trace,
+    captures,
+    terminal: terminalTrace ? {
+      step: terminalTrace.step,
+      round: terminalTrace.round,
+      ok: terminalTrace.ok,
+      action: terminalTrace.action ? { ...terminalTrace.action } : terminalTrace.action,
+      elapsedMs: terminalTrace.elapsedMs,
+      strategyUsed: terminalTrace.strategyUsed || '',
+      fallbackUsed: terminalTrace.fallbackUsed || '',
+      command: terminalTrace.action?.command || terminalTrace.result?.command || '',
+      output: terminalTrace.result?.stdout || terminalTrace.result?.observedText || terminalTrace.result?.stderr || '',
+      observedText: terminalTrace.result?.observedText || '',
+      screenshot: terminalTrace.result?.screenshot ? { ...terminalTrace.result.screenshot } : null,
+      ocr: terminalTrace.result?.ocr ? { ...terminalTrace.result.ocr } : null,
+    } : null,
+    verify: verifyTrace ? {
+      step: verifyTrace.step,
+      round: verifyTrace.round,
+      ok: verifyTrace.ok,
+      action: verifyTrace.action ? { ...verifyTrace.action } : verifyTrace.action,
+      elapsedMs: verifyTrace.elapsedMs,
+      strategyUsed: verifyTrace.strategyUsed || '',
+      fallbackUsed: verifyTrace.fallbackUsed || '',
+      type: verifyTrace.action?.type || verifyTrace.action?.verify || '',
+      state: verifyTrace.result?.state || '',
+      command: verifyTrace.action?.command || '',
+      observedText: verifyTrace.result?.observedText || '',
+      matchedToken: verifyTrace.result?.matchedToken || '',
+      screenshot: verifyTrace.result?.screenshot ? { ...verifyTrace.result.screenshot } : null,
+      ocr: verifyTrace.result?.ocr ? { ...verifyTrace.result.ocr } : null,
+      tokens: Array.isArray(verifyTrace.result?.tokens) ? [...verifyTrace.result.tokens] : [],
+    } : null,
+  };
 }
 
 function buildHeuristicRepairPlan({ task = '', plan = {}, failedStep = null, observations = '' } = {}) {
@@ -866,6 +964,11 @@ function makeQueueResponse(requestRecord, plan, extra = {}) {
     summary: plan?.summary || requestRecord?.summary || 'pending approval',
     plan,
     request: requestRecord,
+    evidence: extra.evidence || buildControlEvidence({
+      plan,
+      requestRecord,
+      queued: true,
+    }),
     ...extra,
   };
 }
@@ -884,6 +987,15 @@ function makeExecutionResponse(requestRecord, plan, executionResults = [], extra
     failedStep: extra.failedStep || executionResults.failedStep || null,
     repairRounds: extra.repairRounds || executionResults.repairRounds || 0,
     executionSummary: summarizeExecutionResults(executionResults),
+    evidence: extra.evidence || buildControlEvidence({
+      plan,
+      requestRecord,
+      executionResults,
+      executionTrace: extra.executionTrace || executionResults.executionTrace || [],
+      finalStatus: extra.finalStatus || executionResults.finalStatus || 'completed',
+      failedStep: extra.failedStep || executionResults.failedStep || null,
+      repairRounds: extra.repairRounds || executionResults.repairRounds || 0,
+    }),
     ...extra,
   };
 }
@@ -910,6 +1022,7 @@ async function queueControlRequest({
     reply,
     approvalRequired: true,
     executionMode: 'queued',
+    evidence: buildControlEvidence({ plan, queued: true }),
     auth: auth ? { required: auth.required, mode: auth.mode, loopback: auth.loopback, remoteAddress: auth.remoteAddress } : null,
   });
   return { plan, requestRecord };
@@ -948,6 +1061,14 @@ async function executeControlRequest({
     repairRounds: executionResults.repairRounds || 0,
     executionSummary: summarizeExecutionResults(executionResults),
     executionError: '',
+    evidence: buildControlEvidence({
+      plan,
+      executionResults,
+      executionTrace: executionResults.executionTrace || [],
+      finalStatus: executionResults.finalStatus || 'completed',
+      failedStep: executionResults.failedStep || null,
+      repairRounds: executionResults.repairRounds || 0,
+    }),
     auth: auth ? { required: auth.required, mode: auth.mode, loopback: auth.loopback, remoteAddress: auth.remoteAddress } : null,
   });
   return {
@@ -1691,6 +1812,16 @@ const server = http.createServer(async (request, response) => {
         finalStatus,
         failedStep,
         repairRounds: executionResults.repairRounds || 0,
+        evidence: buildControlEvidence({
+          plan,
+          requestRecord,
+          executionResults,
+          executionTrace,
+          finalStatus,
+          failedStep,
+          repairRounds: executionResults.repairRounds || 0,
+          queued: false,
+        }),
         auth,
         request: requestRecord,
       };

@@ -45,26 +45,179 @@ function saveJson(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-function sanitizeComputerUseContent(content) {
+function extractLegacyComputerUsePayload(content) {
   const text = String(content || '');
   if (!text.includes('"executionTrace"') && !text.includes('"finalStatus"') && !text.includes('"failedStep"')) {
-    return text;
+    return null;
   }
 
-  const promptLine = text.split('\n').find((line) => line.trim())?.trim() || '';
-  if (!promptLine) {
-    return '컴퓨터 제어를 내부적으로 실행했습니다.';
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end <= start) {
+    return null;
   }
-  return `${promptLine}를 내부적으로 실행했습니다.`;
+
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function summarizeComputerUseResult(result = {}) {
+  if (!result) return '아직 실행한 프롬프트가 없습니다.';
+  if (result.error) return String(result.error);
+  const summary = String(result.summary || '').trim();
+  if (result.queued) {
+    return summary ? `${summary}를 대기열에 올렸습니다.` : '실행을 대기열에 올렸습니다.';
+  }
+  if (String(result.finalStatus || '').toLowerCase() === 'preview') {
+    return summary ? `${summary}의 실행 계획을 생성했습니다.` : '실행 계획을 생성했습니다.';
+  }
+  if (summary) return `${summary}를 내부적으로 실행했습니다.`;
+  if (result.finalStatus) {
+    const statusText = String(result.finalStatus || 'completed');
+    const statusLabel = statusText === 'completed' ? '완료' : statusText;
+    const repairText = result.repairRounds ? ` ${result.repairRounds}회 보정을 거쳐` : '';
+    const failedText = result.failedStep?.step ? `, ${result.failedStep.step} 단계에서 조정이 필요했습니다` : '';
+    return `${repairText} 작업을 ${statusLabel}했습니다${failedText}.`.trim();
+  }
+  return '실행이 완료되었습니다.';
+}
+
+function buildComputerUseMessageContent(result = {}) {
+  const summary = String(result.summary || '').trim() || '컴퓨터 제어를 실행했습니다.';
+  const lines = [summary];
+  if (result.queued) {
+    lines.push('실행 대기 중입니다.');
+  } else {
+    lines.push(`상태: ${result.finalStatus || 'completed'}`);
+  }
+  if (result.repairRounds) {
+    lines.push(`보정 횟수: ${result.repairRounds}`);
+  }
+  if (result.request?.id || result.requestId) {
+    lines.push(`요청 ID: ${result.request?.id || result.requestId}`);
+  }
+  return lines.join('\n');
+}
+
+function buildComputerUseEvidence(result = {}) {
+  const executionTrace = Array.isArray(result.executionTrace)
+    ? result.executionTrace.map((entry) => ({
+        ...entry,
+        action: entry.action ? { ...entry.action } : entry.action,
+        result: entry.result
+          ? {
+              ...entry.result,
+              screenshot: entry.result.screenshot ? { ...entry.result.screenshot } : entry.result.screenshot,
+              ocr: entry.result.ocr ? { ...entry.result.ocr } : entry.result.ocr,
+            }
+          : entry.result,
+      }))
+    : [];
+
+  const captures = executionTrace.flatMap((entry) => {
+    const screenshot = entry.result?.screenshot;
+    if (!screenshot) return [];
+    return [{
+      step: entry.step,
+      round: entry.round,
+      ok: entry.ok,
+      action: entry.action ? { ...entry.action } : entry.action,
+      elapsedMs: entry.elapsedMs,
+      strategyUsed: entry.strategyUsed || '',
+      fallbackUsed: entry.fallbackUsed || '',
+      observedText: entry.result?.observedText || '',
+      screenshot,
+      ocr: entry.result?.ocr ? { ...entry.result.ocr } : entry.result.ocr,
+    }];
+  });
+
+  const terminalEntry = [...executionTrace].reverse().find((entry) => {
+    const actionName = String(entry.action?.action || '').toLowerCase();
+    const verifyType = String(entry.action?.type || entry.action?.verify || '').toLowerCase();
+    return actionName === 'runshell' || (actionName === 'verify' && ['terminaloutputvisible', 'terminalvisible', 'shellvisible'].includes(verifyType));
+  }) || [...executionTrace].reverse().find((entry) => {
+    const stdout = String(entry?.result?.stdout || '').trim();
+    const stderr = String(entry?.result?.stderr || '').trim();
+    const observedText = String(entry?.result?.observedText || '').trim();
+    return Boolean(stdout || stderr || observedText);
+  }) || null;
+
+  const verifyEntry = [...executionTrace].reverse().find((entry) => {
+    const actionName = String(entry.action?.action || '').toLowerCase();
+    return actionName === 'verify';
+  }) || terminalEntry;
+
+  return {
+    summary: result.summary || '',
+    finalStatus: result.finalStatus || (result.queued ? 'queued' : 'completed'),
+    repairRounds: Number(result.repairRounds || 0),
+    failedStep: result.failedStep || null,
+    requestId: result.request?.id || result.requestId || '',
+    queued: Boolean(result.queued),
+    executionTrace,
+    captures,
+    terminal: terminalEntry ? {
+      step: terminalEntry.step,
+      round: terminalEntry.round,
+      ok: terminalEntry.ok,
+      action: terminalEntry.action ? { ...terminalEntry.action } : terminalEntry.action,
+      elapsedMs: terminalEntry.elapsedMs,
+      strategyUsed: terminalEntry.strategyUsed || '',
+      fallbackUsed: terminalEntry.fallbackUsed || '',
+      command: terminalEntry.action?.command || terminalEntry.result?.command || '',
+      output: terminalEntry.result?.stdout || terminalEntry.result?.observedText || terminalEntry.result?.stderr || '',
+      observedText: terminalEntry.result?.observedText || '',
+      screenshot: terminalEntry.result?.screenshot ? { ...terminalEntry.result.screenshot } : null,
+      ocr: terminalEntry.result?.ocr ? { ...terminalEntry.result.ocr } : null,
+    } : null,
+    verify: verifyEntry ? {
+      step: verifyEntry.step,
+      round: verifyEntry.round,
+      ok: verifyEntry.ok,
+      action: verifyEntry.action ? { ...verifyEntry.action } : verifyEntry.action,
+      elapsedMs: verifyEntry.elapsedMs,
+      strategyUsed: verifyEntry.strategyUsed || '',
+      fallbackUsed: verifyEntry.fallbackUsed || '',
+      type: verifyEntry.action?.type || verifyEntry.action?.verify || '',
+      state: verifyEntry.result?.state || '',
+      command: verifyEntry.action?.command || '',
+      observedText: verifyEntry.result?.observedText || '',
+      matchedToken: verifyEntry.result?.matchedToken || '',
+      screenshot: verifyEntry.result?.screenshot ? { ...verifyEntry.result.screenshot } : null,
+      ocr: verifyEntry.result?.ocr ? { ...verifyEntry.result.ocr } : null,
+      tokens: Array.isArray(verifyEntry.result?.tokens) ? [...verifyEntry.result.tokens] : [],
+    } : null,
+  };
+}
+
+function sanitizeComputerUseContent(content) {
+  const legacy = extractLegacyComputerUsePayload(content);
+  if (legacy) {
+    return summarizeComputerUseResult(legacy);
+  }
+  return String(content || '');
+}
+
+function migrateComputerUseMessage(message = {}) {
+  if (message?.role !== 'assistant') return message;
+  const legacy = extractLegacyComputerUsePayload(message.content);
+  if (!legacy) {
+    const content = sanitizeComputerUseContent(message.content);
+    return content === message.content ? message : { ...message, content };
+  }
+  return {
+    ...message,
+    content: buildComputerUseMessageContent(legacy),
+    evidence: message.evidence || buildComputerUseEvidence(legacy),
+    kind: message.kind || 'computer-use',
+  };
 }
 
 function sanitizeSessionMessages(messages = []) {
-  return messages.map((message) => {
-    if (message?.role !== 'assistant') return message;
-    const content = sanitizeComputerUseContent(message.content);
-    if (content === message.content) return message;
-    return { ...message, content };
-  });
+  return messages.map((message) => migrateComputerUseMessage(message));
 }
 
 function sanitizeSessions(sessions = []) {
@@ -108,24 +261,118 @@ function describeControlAction(action = {}) {
 }
 
 function summarizeResultPayload(result) {
-  if (!result) return '아직 실행한 프롬프트가 없습니다.';
-  if (result.error) return String(result.error);
-  if (result.summary) return `${String(result.summary)}를 내부적으로 실행했습니다.`;
-  if (result.finalStatus) {
-    const statusText = String(result.finalStatus || 'completed');
-    const statusLabel = statusText === 'completed' ? '완료' : statusText;
-    const repairText = result.repairRounds ? ` ${result.repairRounds}회 보정을 거쳐` : '';
-    const failedText = result.failedStep?.step ? `, ${result.failedStep.step} 단계에서 조정이 필요했습니다` : '';
-    return `${repairText} 작업을 ${statusLabel}했습니다${failedText}.`.trim();
-  }
-  return '실행이 완료되었습니다.';
+  return summarizeComputerUseResult(result);
 }
 
-function getLatestComputerTrace(result) {
-  if (!Array.isArray(result?.executionTrace) || result.executionTrace.length === 0) {
-    return null;
-  }
-  return result.executionTrace[result.executionTrace.length - 1] || null;
+function renderComputerEvidence(evidence) {
+  if (!evidence) return null;
+  const executionTrace = Array.isArray(evidence.executionTrace) ? evidence.executionTrace : [];
+  const captures = Array.isArray(evidence.captures) ? evidence.captures : [];
+  const terminal = evidence.terminal || null;
+  const verify = evidence.verify || null;
+
+  return (
+    <div className="computerEvidence">
+      <div className="evidenceHeader">
+        <div>
+          <div className="sectionLabel">실행 증거</div>
+          <div className="evidenceSummary">{summarizeResultPayload(evidence)}</div>
+        </div>
+        <div className="evidenceHeaderMeta">
+          {evidence.finalStatus ? `상태: ${evidence.finalStatus}` : ''}
+          {evidence.repairRounds ? ` · 보정 ${evidence.repairRounds}회` : ''}
+          {evidence.requestId ? ` · ${evidence.requestId}` : ''}
+        </div>
+      </div>
+
+      {terminal && (
+        <div className="evidencePanel">
+          <div className="evidencePanelTitle">Terminal</div>
+          <div className="evidencePanelText">
+            {terminal.command ? `command: ${terminal.command}` : 'command: -'}
+          </div>
+          <div className="evidencePanelText">
+            {terminal.output ? `output: ${terminal.output}` : 'output: -'}
+          </div>
+          {terminal.observedText && <div className="evidencePanelText">ocr: {terminal.observedText}</div>}
+          {terminal.screenshot?.dataUrl && (
+            <img className="evidenceImage" src={terminal.screenshot.dataUrl} alt="terminal capture" />
+          )}
+        </div>
+      )}
+
+      {verify && (
+        <div className="evidencePanel">
+          <div className="evidencePanelTitle">Verify</div>
+          <div className="evidencePanelText">
+            {verify.type ? `type: ${verify.type}` : 'type: -'}
+            {verify.ok !== undefined ? ` · ${verify.ok ? 'ok' : 'fail'}` : ''}
+          </div>
+          <div className="evidencePanelText">
+            {verify.observedText ? `observed: ${verify.observedText}` : 'observed: -'}
+          </div>
+          {verify.matchedToken ? <div className="evidencePanelText">matched: {verify.matchedToken}</div> : null}
+          {verify.screenshot?.dataUrl && (
+            <img className="evidenceImage" src={verify.screenshot.dataUrl} alt="verification capture" />
+          )}
+        </div>
+      )}
+
+      {captures.length > 0 && (
+        <div className="evidencePanel">
+          <div className="evidencePanelTitle">Captures</div>
+          <div className="captureGrid">
+            {captures.map((capture) => (
+              <article key={`${capture.step}-${capture.round}-${describeControlAction(capture.action)}`} className="captureCard">
+                <div className="captureCardTop">
+                  <span>Step {capture.step}</span>
+                  <span>{capture.ok ? 'ok' : 'fail'}</span>
+                </div>
+                <div className="captureCardAction">{describeControlAction(capture.action)}</div>
+                <div className="traceMeta">
+                  {capture.strategyUsed ? `strategy=${capture.strategyUsed}` : ''}
+                  {capture.fallbackUsed ? ` · fallback=${capture.fallbackUsed}` : ''}
+                  {Number.isFinite(capture.elapsedMs) ? ` · ${capture.elapsedMs}ms` : ''}
+                </div>
+                {capture.observedText ? <div className="captureCardText">ocr: {capture.observedText}</div> : null}
+                {capture.screenshot?.dataUrl && (
+                  <img className="captureImage" src={capture.screenshot.dataUrl} alt={`capture step ${capture.step}`} />
+                )}
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {executionTrace.length > 0 && (
+        <div className="evidencePanel">
+          <div className="evidencePanelTitle">Trace</div>
+          <div className="traceList">
+            {executionTrace.map((entry) => (
+              <div key={`${entry.step}-${describeControlAction(entry.action)}`} className={`traceItem ${entry.ok ? 'ok' : 'fail'}`}>
+                <div className="traceTop">
+                  <span>Step {entry.step}</span>
+                  <span>{entry.ok ? 'ok' : 'fail'}</span>
+                </div>
+                <div className="traceAction">{describeControlAction(entry.action)}</div>
+                <div className="traceMeta">
+                  {entry.strategyUsed ? `strategy=${entry.strategyUsed}` : ''}
+                  {entry.fallbackUsed ? ` · fallback=${entry.fallbackUsed}` : ''}
+                  {Number.isFinite(entry.elapsedMs) ? ` · ${entry.elapsedMs}ms` : ''}
+                </div>
+                {entry.result?.observedText ? <div className="traceOutput">ocr: {String(entry.result.observedText)}</div> : null}
+                {entry.result?.stdout ? <div className="traceOutput">stdout: {String(entry.result.stdout)}</div> : null}
+                {entry.result?.stderr ? <div className="traceOutput">stderr: {String(entry.result.stderr)}</div> : null}
+                {entry.result?.screenshot?.dataUrl && (
+                  <img className="captureImage" src={entry.result.screenshot.dataUrl} alt={`trace step ${entry.step}`} />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function normalizeBaseUrl(value) {
@@ -485,13 +732,33 @@ export default function App() {
           execute: true,
         },
       });
-      setComputerResult(payload);
-      setActionStatus(payload?.queued ? `대기: ${payload?.summary || prompt}` : `완료: ${payload?.summary || prompt}`);
+      const normalizedPayload = {
+        ...payload,
+        evidence: payload?.evidence || buildComputerUseEvidence(payload || {}),
+      };
+      updateActiveSession((session) => ({
+        ...session,
+        title: session.messages.length === 0 ? prompt.slice(0, 32) : session.title,
+        updatedAt: new Date().toISOString(),
+        messages: [
+          ...session.messages,
+          { id: newId('msg'), role: 'user', content: prompt, kind: 'computer-use' },
+          {
+            id: newId('msg'),
+            role: 'assistant',
+            content: buildComputerUseMessageContent(normalizedPayload),
+            evidence: normalizedPayload.evidence,
+            kind: 'computer-use',
+          },
+        ],
+      }));
+      setComputerResult(normalizedPayload);
+      setActionStatus(normalizedPayload?.queued ? `대기: ${normalizedPayload?.summary || prompt}` : `완료: ${normalizedPayload?.summary || prompt}`);
       await refreshRequestQueue();
       await refreshAudit();
-      return payload;
+      return normalizedPayload;
     } catch (error) {
-      setComputerResult({ ok: false, error: error.message || String(error) });
+      setComputerResult({ ok: false, error: error.message || String(error), evidence: null });
       setActionStatus(`실행 실패: ${error.message || String(error)}`);
       return null;
     } finally {
@@ -666,17 +933,10 @@ export default function App() {
             execute: true,
           },
         });
-        const summary = response?.summary || '컴퓨터 제어를 실행했습니다.';
-        const statusLine = response?.queued
-          ? '실행 대기 중입니다.'
-          : `상태: ${response?.finalStatus || 'completed'}`;
-        const extraLine = response?.repairRounds
-          ? `보정 횟수: ${response.repairRounds}`
-          : '';
-        const requestLine = response?.queued
-          ? `요청 ID: ${response?.request?.id || response?.requestId || 'unknown'}`
-          : '';
-        const content = [summary, statusLine, extraLine, requestLine].filter(Boolean).join('\n');
+        const normalizedResponse = {
+          ...response,
+          evidence: response?.evidence || buildComputerUseEvidence(response || {}),
+        };
         updateActiveSession((session) => ({
           ...session,
           updatedAt: new Date().toISOString(),
@@ -684,12 +944,15 @@ export default function App() {
             message.id === assistantId
               ? {
                   ...message,
-                  content,
+                  content: buildComputerUseMessageContent(normalizedResponse),
+                  evidence: normalizedResponse.evidence,
+                  kind: 'computer-use',
                 }
               : message,
           ),
         }));
-        setActionStatus(response?.queued ? `대기: ${summary}` : `컴퓨터 제어 완료: ${summary}`);
+        setComputerResult(normalizedResponse);
+        setActionStatus(normalizedResponse?.queued ? `대기: ${normalizedResponse.summary || text}` : `컴퓨터 제어 완료: ${normalizedResponse.summary || text}`);
         await refreshRequestQueue();
         await refreshAudit();
         setSending(false);
@@ -898,6 +1161,7 @@ export default function App() {
                   <div className="messageBody">
                     <div className="messageLabel">{message.role === 'user' ? 'You' : 'Hermes'}</div>
                     <div className="messageText">{message.content}</div>
+                    {message.evidence && renderComputerEvidence(message.evidence)}
                   </div>
                 </article>
               ))}
@@ -1024,7 +1288,7 @@ export default function App() {
                       <div className="messageMeta">
                         {computerResult?.finalStatus ? `실행 상태: ${computerResult.finalStatus}` : ''}
                         {computerResult?.repairRounds ? ` · 보정 ${computerResult.repairRounds}회` : ''}
-                        {computerResult?.failedStep?.step ? ` · 조정 단계: ${computerResult.failedStep.step}` : ''}
+                        {computerResult?.requestId || computerResult?.request?.id ? ` · 요청 ID: ${computerResult?.requestId || computerResult?.request?.id}` : ''}
                       </div>
                     </div>
                   </div>
@@ -1032,41 +1296,10 @@ export default function App() {
                     <div className="actionMeta">
                       실행 상태는 {computerResult.finalStatus}입니다.
                       {computerResult.repairRounds ? ` · 보정 ${computerResult.repairRounds}회` : ''}
-                      {computerResult.failedStep ? ` · 조정 단계 ${computerResult.failedStep.step}` : ''}
+                      {computerResult.requestId || computerResult.request?.id ? ` · 요청 ID ${computerResult.requestId || computerResult.request?.id}` : ''}
                     </div>
                   )}
-                  {getLatestComputerTrace(computerResult)?.result?.screenshot?.dataUrl && (
-                    <div className="capturePreview">
-                      <div className="actionMeta">
-                        capture: visible · {getLatestComputerTrace(computerResult)?.result?.screenshot?.path?.split('/').pop() || 'screen.png'}
-                      </div>
-                      <img
-                        className="captureImage"
-                        src={getLatestComputerTrace(computerResult).result.screenshot.dataUrl}
-                        alt="computer use capture preview"
-                      />
-                    </div>
-                  )}
-                  {Array.isArray(computerResult?.executionTrace) && computerResult.executionTrace.length > 0 && (
-                    <div className="traceList">
-                      {computerResult.executionTrace.map((entry) => (
-                        <div key={`${entry.step}-${describeControlAction(entry.action)}`} className={`traceItem ${entry.ok ? 'ok' : 'fail'}`}>
-                          <div className="traceTop">
-                            <span>Step {entry.step}</span>
-                            <span>{entry.ok ? 'ok' : 'fail'}</span>
-                          </div>
-                          <div className="traceAction">{describeControlAction(entry.action)}</div>
-                          <div className="traceMeta">
-                            {entry.strategyUsed ? `strategy=${entry.strategyUsed}` : ''}
-                            {entry.fallbackUsed ? ` · fallback=${entry.fallbackUsed}` : ''}
-                            {Number.isFinite(entry.elapsedMs) ? ` · ${entry.elapsedMs}ms` : ''}
-                            {entry.result?.observedText ? ` · ocr="${String(entry.result.observedText).slice(0, 80)}"` : ''}
-                            {entry.result?.screenshot?.path ? ` · shot=${entry.result.screenshot.path.split('/').pop()}` : ''}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="actionMeta">상세 증거는 대화 본문에 표시됩니다.</div>
                 </div>
               </section>
 
