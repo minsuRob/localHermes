@@ -45,6 +45,35 @@ function saveJson(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function sanitizeComputerUseContent(content) {
+  const text = String(content || '');
+  if (!text.includes('"executionTrace"') && !text.includes('"finalStatus"') && !text.includes('"failedStep"')) {
+    return text;
+  }
+
+  const promptLine = text.split('\n').find((line) => line.trim())?.trim() || '';
+  if (!promptLine) {
+    return '컴퓨터 제어를 내부적으로 실행했습니다.';
+  }
+  return `${promptLine}를 내부적으로 실행했습니다.`;
+}
+
+function sanitizeSessionMessages(messages = []) {
+  return messages.map((message) => {
+    if (message?.role !== 'assistant') return message;
+    const content = sanitizeComputerUseContent(message.content);
+    if (content === message.content) return message;
+    return { ...message, content };
+  });
+}
+
+function sanitizeSessions(sessions = []) {
+  return sessions.map((session) => ({
+    ...session,
+    messages: sanitizeSessionMessages(session?.messages || []),
+  }));
+}
+
 function newId(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -268,7 +297,7 @@ async function parseAssistantResponse(response, onChunk) {
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [controlRailOpen, setControlRailOpen] = useState(false);
-  const [sessions, setSessions] = useState(() => loadJson(STORAGE_KEYS.sessions, initialSessions));
+  const [sessions, setSessions] = useState(() => sanitizeSessions(loadJson(STORAGE_KEYS.sessions, initialSessions)));
   const [activeSessionId, setActiveSessionId] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.activeSessionId) || initialSessions[0].id;
   });
