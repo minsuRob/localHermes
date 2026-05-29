@@ -83,10 +83,11 @@ function summarizeResultPayload(result) {
   if (result.error) return String(result.error);
   if (result.summary) return `${String(result.summary)}를 내부적으로 실행했습니다.`;
   if (result.finalStatus) {
-    const bits = [`status=${result.finalStatus}`];
-    if (result.repairRounds) bits.push(`repairs=${result.repairRounds}`);
-    if (result.failedStep?.step) bits.push(`failedStep=${result.failedStep.step}`);
-    return `${bits.join(' · ')} 상태로 처리했습니다.`;
+    const statusText = String(result.finalStatus || 'completed');
+    const statusLabel = statusText === 'completed' ? '완료' : statusText;
+    const repairText = result.repairRounds ? ` ${result.repairRounds}회 보정을 거쳐` : '';
+    const failedText = result.failedStep?.step ? `, ${result.failedStep.step} 단계에서 조정이 필요했습니다` : '';
+    return `${repairText} 작업을 ${statusLabel}했습니다${failedText}.`.trim();
   }
   return '실행이 완료되었습니다.';
 }
@@ -992,17 +993,17 @@ export default function App() {
                       <div className="messageLabel">Result</div>
                       <div className="messageText">{summarizeResultPayload(computerResult)}</div>
                       <div className="messageMeta">
-                        {computerResult?.finalStatus ? `status=${computerResult.finalStatus}` : ''}
-                        {computerResult?.repairRounds ? ` · repairs=${computerResult.repairRounds}` : ''}
-                        {computerResult?.failedStep?.step ? ` · failedStep=${computerResult.failedStep.step}` : ''}
+                        {computerResult?.finalStatus ? `실행 상태: ${computerResult.finalStatus}` : ''}
+                        {computerResult?.repairRounds ? ` · 보정 ${computerResult.repairRounds}회` : ''}
+                        {computerResult?.failedStep?.step ? ` · 조정 단계: ${computerResult.failedStep.step}` : ''}
                       </div>
                     </div>
                   </div>
                   {computerResult?.finalStatus && (
                     <div className="actionMeta">
-                      status: {computerResult.finalStatus}
-                      {computerResult.repairRounds ? ` · repairs ${computerResult.repairRounds}` : ''}
-                      {computerResult.failedStep ? ` · failed step ${computerResult.failedStep.step}` : ''}
+                      실행 상태는 {computerResult.finalStatus}입니다.
+                      {computerResult.repairRounds ? ` · 보정 ${computerResult.repairRounds}회` : ''}
+                      {computerResult.failedStep ? ` · 조정 단계 ${computerResult.failedStep.step}` : ''}
                     </div>
                   )}
                   {getLatestComputerTrace(computerResult)?.result?.screenshot?.dataUrl && (
